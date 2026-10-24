@@ -1,4 +1,4 @@
-# EDN8 patch revision 1: guarded write, four freeze slots, flag off $07FE
+# EDN8 patch revision 1: guarded write, four freeze slots, flag off $07FE, no speed hook
 
 `bridge/extend_patch.py` rebuilds `bridge_core/patches/zelda_z1rr_coop.ips` (and its
 `.expected.json`) from 2.0 beta 8's relocated patch. Co-op's commands, framing and timing are
@@ -13,6 +13,7 @@ version command's first byte, 0 before, is now 1 (`cc_client.PATCH_REVISION`).
 | Main-loop hook order | dispatch, then the once-only setup and freeze scan ($B5A7) | setup and freeze scan, then dispatch | SRAM survives a power-off; the setup now clears the flag first, so a command left waiting at power-off is dropped rather than run on the first frame of play. Same 21 bytes. |
 | Freeze slots | 8, $7F00-$7F7F | 4, $7F40-$7F7F | $7F00-$7F3F is left to the ROM (ZORA's statistics screen keeps its counters there). Before, the power-on setup cleared $7F00/$7F10/$7F20/$7F30, and the per-frame scan treated any of those bytes reaching $AB as an armed slot and wrote through the bytes after it. Nothing in the bridge sends the freeze command; a fifth freeze is refused cleanly (answer 0). |
 | Action $05 | unused (the dispatcher sent actions >= 5 to an `RTS`) | guarded write, $B883-$B8DA in bank 4 | Below. Actions >= 6 still do nothing. |
+| Speed hook | `InitLinkSpeed`'s first two instructions (bank 5 $B366) call a helper at bank 5 $B8F0 that takes Link's speed from $7F93 while $7F92 is $AB (a Crowd Control effect) | vanilla bytes at both | Nothing in z1rr-coop sets $7F92. A randomizer's speed features hook those same instructions (ZORA's Pegasus Boots and Red Bubble Curse: Slow Speed), so with the hook a ZORA ROM using them failed the bridge's manifest check. Bank 5 is now untouched. |
 
 ## Action $05: guarded write
 
@@ -43,7 +44,8 @@ Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None
   in the `test` extra) with the USB FIFO simulated: the flag, the power-off case, co-op's read and
   write commands, the version, the guarded write (holds, fails, no guards, the largest frame,
   actions above 5), the statistics block left alone with every byte $AB, four freezes and a refused
-  fifth, and `CCClient` and `bridge_cli patch-check` against the cart's own code. Set
+  fifth, bank 5 left exactly as vanilla, and `CCClient` and `bridge_cli patch-check` against the
+  cart's own code. Set
   `Z1RR_VANILLA_PRG0` to a vanilla PRG0 ROM. Against beta 8's IPS, every new test fails and co-op's
   pass.
 - The manifest validates PRG0 and PRG1 (`extend_patch.py --prg1` checks every site).
@@ -59,8 +61,9 @@ Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None
    level, a save, a reset and Continue, as for any bridge release.
 4. If the ROM is a ZORA seed: play into levels 7-9 and check room $7F keeps its item taken after a
    save (the $07FE fix), and that the statistics screen's times survive a power cycle (the slots).
+   With Pegasus Boots on, the bridge now accepts the ROM and the boots run (the speed hook).
 
 ## For randomizers
 
 ZORA's reserved ranges (`docs/rom-map.md` "Reserved for z1rr-coop") gain bank 4 $B883-$B8DA and
-SRAM $7F9E, and lose CPU RAM $07FE and SRAM $7F00-$7F3F.
+SRAM $7F9E, and lose CPU RAM $07FE, SRAM $7F00-$7F3F, and bank 5's $B366-$B369 and $B8F0-$B901.

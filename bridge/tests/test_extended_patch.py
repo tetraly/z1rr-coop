@@ -267,3 +267,14 @@ def test_patch_check_passes_on_the_extended_cart(monkeypatch, capsys):
     assert cli.main(["patch-check", "--port", "COM9"]) == 0
     assert capsys.readouterr().out.count("PASS") == 2
     assert cart[cli.PATCH_CHECK_BYTE] == 0x33
+
+
+# --- the speed hook --------------------------------------------------------------------------------
+
+def test_bank_5_is_vanilla():
+    """No speed hook: InitLinkSpeed ($B366) and the old helper ($B8F0) hold vanilla's bytes, so a
+    randomizer's own speed hooks there (ZORA's Pegasus Boots, Slow Speed) are left alone."""
+    vanilla = _vanilla()
+    patched = apply(vanilla, PATCH_PATH.read_bytes())
+    bank_5 = slice(INES_HEADER + 5 * BANK_SIZE, INES_HEADER + 6 * BANK_SIZE)
+    assert patched[bank_5] == vanilla[bank_5]

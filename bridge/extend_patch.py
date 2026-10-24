@@ -1,6 +1,6 @@
 """Extend the z1rr-coop patch (2.0 beta 8's relocated IPS) for Archipelago on real hardware.
 
-Three changes, all inside the patch's own code in bank 4, and none to how co-op works:
+Four changes, none to how co-op works:
 
 1. **The "message waiting" flag moves off $07FE** to $7F9E, a byte of the patch's own SRAM page
    that nothing else uses. $07FE is also the saved flag byte of room $7F in the levels 7-9 block
@@ -19,6 +19,11 @@ Three changes, all inside the patch's own code in bank 4, and none to how co-op 
    0 (a guard failed, nothing written). Archipelago's client gives items this way, so a pickup
    between its read and its write can't be overwritten or an item given twice. Guards read their
    address, so they belong on RAM, never on a register with read side effects.
+4. **The speed hook is gone.** Crowd Control's speed effect replaced InitLinkSpeed's first two
+   instructions (bank 5 $B366, `LDA #$60 / STA $00`) with a call to a helper at bank 5 $B8F0
+   that took Link's speed from $7F93 while $7F92 held $AB. Nothing in z1rr-coop sets $7F92, and
+   a randomizer's speed features hook the same instructions (ZORA's Pegasus Boots and Red Bubble
+   Curse: Slow Speed), so the patch now leaves those bytes and the helper's as vanilla has them.
 
 The version command's answer changes from 00 00 10 10 08 to 01 00 10 10 08: the first byte, 0 in
 the Crowd Control original, is this patch's revision.
@@ -28,7 +33,7 @@ beta 8 value (so it refuses to run twice, or on another patch), and rewrites the
 expected-vanilla manifest in place.
 
 Usage:
-    python extend_patch.py <vanilla PRG0 .nes> [--prg1 <vanilla PRG1 .nes>]
+    python extend_patch.py <vanilla PRG0 .nes> [--prg1 <vanilla PRG1 .nes>] [--base-ips <beta 8 .ips>]
 """
 from __future__ import annotations
 
@@ -52,7 +57,7 @@ VANILLA_SHA1S = {
 INES_HEADER = 16
 BANK_SIZE = 0x4000
 SWAP_WINDOW = 0x8000
-BANK_4 = 4
+BANK_4, BANK_5 = 4, 5
 
 PATCH_REVISION = 0x01
 
@@ -73,8 +78,12 @@ FREEZE_REPLY = 0xB52C                # the freeze handler's reply: prelude, size
 JUMP_TABLE_SLOT_5 = 0xB84C           # the dispatcher's sixth pointer (it sends actions >= 5 there)
 
 
+def bank_offset(bank: int, cpu: int) -> int:
+    return INES_HEADER + bank * BANK_SIZE + (cpu - SWAP_WINDOW)
+
+
 def bank4_offset(cpu: int) -> int:
-    return INES_HEADER + BANK_4 * BANK_SIZE + (cpu - SWAP_WINDOW)
+    return bank_offset(BANK_4, cpu)
 
 
 def le16(value: int) -> bytes:
@@ -83,11 +92,13 @@ def le16(value: int) -> bytes:
 
 @dataclass(frozen=True)
 class Edit:
-    """Bytes at a bank-4 CPU address: what the beta 8 patch holds there, and what they become."""
+    """Bytes at a CPU address of a switched bank: what the beta 8 patch holds there, and what they
+    become."""
     cpu: int
     old: bytes
     new: bytes
     why: str
+    bank: int = BANK_4
 
 
 NOP3 = bytes((0xEA, 0xEA, 0xEA))
@@ -116,6 +127,11 @@ EDITS: tuple[Edit, ...] = (
     Edit(JUMP_TABLE_SLOT_5, le16(0xB841), le16(GUARDED_WRITE_ORIGIN), "dispatch: action $05"),
     # the version answer's first byte
     Edit(0xB6FC, b"\xa9\x00", bytes((0xA9, PATCH_REVISION)), "version: patch revision"),
+    # 4. the speed hook: InitLinkSpeed's instructions and the helper's free space back to vanilla's
+    Edit(0xB366, bytes.fromhex("20f0b8ea"), bytes.fromhex("a9608500"), "InitLinkSpeed: vanilla again",
+         bank=BANK_5),
+    Edit(0xB8F0, bytes.fromhex("ad927fc9abf005a9608500" "60ad937f850060"), b"\xff" * 18,
+         "the speed helper: free again", bank=BANK_5),
 )
 
 
@@ -209,7 +225,7 @@ def extend(vanilla: bytes, beta8_ips: bytes) -> bytes:
     beta 8's (any edited byte differs from beta 8's value), naming the first such site."""
     rom = bytearray(apply(vanilla, beta8_ips))
     for edit in EDITS:
-        at = bank4_offset(edit.cpu)
+        at = bank_offset(edit.bank, edit.cpu)
         held = bytes(rom[at:at + len(edit.old)])
         if held != edit.old:
             already = held == edit.new
@@ -239,12 +255,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("vanilla", help="vanilla PRG0 Legend of Zelda ROM")
     parser.add_argument("--prg1", help="vanilla PRG1 ROM, to check every patch site matches PRG0")
+    parser.add_argument("--base-ips", type=Path, default=PATCH_PATH,
+                        help="beta 8's IPS to extend (default: the shipped one, if not extended yet)")
     args = parser.parse_args()
     vanilla = Path(args.vanilla).read_bytes()
     if hashlib.sha1(vanilla).hexdigest() != VANILLA_SHA1S["prg0"]:
         sys.exit("the ROM is not vanilla PRG0")
     try:
-        extended = extend(vanilla, PATCH_PATH.read_bytes())
+        extended = extend(vanilla, args.base_ips.read_bytes())
     except ValueError as error:
         sys.exit(str(error))
     ips = make_ips(vanilla, extended)
