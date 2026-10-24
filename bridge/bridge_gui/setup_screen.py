@@ -13,7 +13,7 @@ from typing import Any
 
 import customtkinter as ctk
 
-from bridge_core import ips
+from bridge_core import ips, patch_revisions
 from bridge_core.mister_diagnostics import MisterDiagnosticReport, run_mister_diagnostics
 from bridge_core.mister_health import format_mister_health_summary, probe_mister_helper
 from bridge_core.mister_deploy import DeployAsset, MisterDeployService, MisterSshConfig
@@ -212,12 +212,22 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             self._update_mister_deploy_state()
             return
 
-        patch_bytes = self._load_patch()
+        patch_bytes, _expected = patch_revisions.load_patch()
+        older = patch_revisions.older_patch_of(rom_bytes)
         if ips.is_patched(rom_bytes, patch_bytes):
             self._status_label.configure(
                 text="✓ ROM is already patched. Ready.", text_color="green"
             )
             self._patched_path = self._rom_path
+        elif older:
+            self._status_label.configure(
+                text=(
+                    f"ROM was patched by the {older[0]} bridge. Will re-patch it for this bridge and "
+                    f"save as {patch_revisions.patched_path(self._rom_path).name} when you click Continue."
+                ),
+                text_color="gray",
+            )
+            self._patched_path = None
         else:
             self._status_label.configure(
                 text="ROM is not patched. Will save as <name>_emucoop.nes when you click Continue.",
@@ -239,28 +249,27 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
 
         assert self._rom_path is not None
         rom_bytes = self._rom_path.read_bytes()
-        patch_bytes = self._load_patch()
-        if not ips.is_patched(rom_bytes, patch_bytes):
-            try:
-                expected = ips.load_expected_manifest(self._load_manifest())
-                patched = ips.apply_validated(rom_bytes, patch_bytes, expected)
-            except ips.RomConflict as exc:
-                offsets = ", ".join(f"0x{o:06X}" for o, _, _ in exc.mismatches[:6])
-                more = f" (+{len(exc.mismatches) - 6} more)" if len(exc.mismatches) > 6 else ""
-                self._status_label.configure(
-                    text=(
-                        f"✗ ROM modified at {len(exc.mismatches)} patch site(s) "
-                        f"({offsets}{more}). If this is a randomizer seed, "
-                        f"please report the flagstring."
-                    ),
-                    text_color="red",
-                )
-                return
-            out_path = self._rom_path.with_name(self._rom_path.stem + "_emucoop.nes")
-            out_path.write_bytes(patched)
-            self._patched_path = out_path
+        try:
+            prepared = patch_revisions.prepare_rom(rom_bytes)
+        except ips.RomConflict as exc:
+            offsets = ", ".join(f"0x{o:06X}" for o, _, _ in exc.mismatches[:6])
+            more = f" (+{len(exc.mismatches) - 6} more)" if len(exc.mismatches) > 6 else ""
             self._status_label.configure(
-                text=f"✓ Patched and saved: {out_path.name}", text_color="green"
+                text=(
+                    f"✗ ROM modified at {len(exc.mismatches)} patch site(s) "
+                    f"({offsets}{more}). If this is a randomizer seed, "
+                    f"please report the flagstring."
+                ),
+                text_color="red",
+            )
+            return
+        if not prepared.already_patched:
+            out_path = patch_revisions.patched_path(self._rom_path)
+            out_path.write_bytes(prepared.rom)
+            self._patched_path = out_path
+            again = f" (re-patched from the {prepared.replaced_release} bridge's)" if prepared.replaced_release else ""
+            self._status_label.configure(
+                text=f"✓ Patched and saved: {out_path.name}{again}", text_color="green"
             )
         # Optionally upload to EDN8 via edlink-n8.exe (also auto-launches the
         # ROM on the cart). If upload is disabled, surface the SD path so the
@@ -655,12 +664,3 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         which = shutil.which("edlink-n8.exe") or shutil.which("edlink-n8")
         return Path(which) if which else None
 
-    @staticmethod
-    def _load_patch() -> bytes:
-        path = files("bridge_core").joinpath("patches/zelda_z1rr_coop.ips")
-        return path.read_bytes()
-
-    @staticmethod
-    def _load_manifest() -> bytes:
-        path = files("bridge_core").joinpath("patches/zelda_z1rr_coop.expected.json")
-        return path.read_bytes()

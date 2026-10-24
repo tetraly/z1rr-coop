@@ -1,7 +1,9 @@
 # EDN8 patch revision 1: guarded write, four freeze slots, flag off $07FE, no speed hook
 
-`bridge/extend_patch.py` rebuilds `bridge_core/patches/zelda_z1rr_coop.ips` (and its
-`.expected.json`) from 2.0 beta 8's relocated patch. Co-op's commands, framing and timing are
+`bridge/extend_patch.py` builds `bridge_core/patches/zelda_z1rr_coop.ips` (and its
+`.expected.json`) from 2.0 beta 8's relocated patch, which is kept beside it as
+`zelda_z1rr_coop_beta8.ips` (with its manifest); `tests/test_extended_patch.py` checks the shipped
+files rebuild byte for byte. Co-op's commands, framing and timing are
 unchanged; everything below is additive or fixes a byte the patch shared with the game. The
 version command's first byte, 0 before, is now 1 (`cc_client.PATCH_REVISION`).
 
@@ -10,7 +12,7 @@ version command's first byte, 0 before, is now 1 (`cc_client.PATCH_REVISION`).
 | What | Before (beta 8) | Revision 1 | Why |
 |---|---|---|---|
 | "Message waiting" flag | CPU RAM $07FE | SRAM $7F9E | $07FE is room $7F's saved flags in the levels 7-9 block (`WorldFlags` $077F + $7F). Every command set it to $AB and then $00, erasing that room's visited, key-door and item-taken bits; a save kept the loss. `tloz_all` even syncs it as a room byte. |
-| Main-loop hook order | dispatch, then the once-only setup and freeze scan ($B5A7) | setup and freeze scan, then dispatch | SRAM survives a power-off; the setup now clears the flag first, so a command left waiting at power-off is dropped rather than run on the first frame of play. Same 21 bytes. |
+| Main-loop hook order | dispatch, then the once-only setup and freeze scan ($B5A7) | setup and freeze scan, then dispatch | SRAM keeps the new flag through a power-off and a reset; the setup clears it, and now runs before the dispatcher. Same 21 bytes. See "Power-on and reset" below for what this does and doesn't cover. |
 | Freeze slots | 8, $7F00-$7F7F | 4, $7F40-$7F7F | $7F00-$7F3F is left to the ROM (ZORA's statistics screen keeps its counters there). Before, the power-on setup cleared $7F00/$7F10/$7F20/$7F30, and the per-frame scan treated any of those bytes reaching $AB as an armed slot and wrote through the bytes after it. Nothing in the bridge sends the freeze command; a fifth freeze is refused cleanly (answer 0). |
 | Action $05 | unused (the dispatcher sent actions >= 5 to an `RTS`) | guarded write, $B883-$B8DA in bank 4 | Below. Actions >= 6 still do nothing. |
 | Speed hook | `InitLinkSpeed`'s first two instructions (bank 5 $B366) call a helper at bank 5 $B8F0 that takes Link's speed from $7F93 while $7F92 is $AB (a Crowd Control effect) | vanilla bytes at both | Nothing in z1rr-coop sets $7F92. A randomizer's speed features hook those same instructions (ZORA's Pegasus Boots and Red Bubble Curse: Slow Speed), so with the hook a ZORA ROM using them failed the bridge's manifest check. Bank 5 is now untouched. |
@@ -38,6 +40,32 @@ match, makes every write. It answers with one value byte through the freeze comm
 Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None on a timeout
 (unknown: read again before retrying).
 
+## Power-on and reset
+
+The flag now lives in battery-backed SRAM, which neither a reset nor a power-off clears; beta 8's
+flag was in CPU RAM that the game's `ClearRam` zeroes. The patch's once-only setup clears it, but
+the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` stops at $07FE:
+
+- **Power-on:** CPU RAM comes up with arbitrary values, so the setup runs and drops a command
+  left waiting when the console was switched off, unless $07FF happens to power up as $AB, as it
+  could already under beta 8 (about 1 in 256; console-dependent).
+- **Reset:** $07FF survives, so the setup doesn't run again: a command waiting when Reset was
+  pressed (sent outside play, where commands wait) runs on the first frame of play afterwards.
+  Beta 8 dropped it. In co-op this is almost always a read, whose late answer the bridge ignores
+  (its MID is stale); the bridge sends writes only while it sees the game running. A guarded write
+  re-checks its guards when it runs.
+
+## Earlier patches and mixed carts
+
+- **ROMs patched by beta 8** are recognized (`bridge_core/patch_revisions.py`): the bridge writes
+  back the original bytes from beta 8's manifest, then applies this patch, and saves the result as
+  `<name>_emucoop.nes` (an existing `<name>_emucoop.nes` is replaced, not suffixed again). The beta 8
+  bridge refuses a ROM patched by this one.
+- **A beta 8 cart's $07FE**, its flag byte, reads $AB during every command, so `tloz_all` would OR
+  that into the partner's room $7F of levels 7-9 (as it does today with any beta 8 EDN8). The EDN8
+  endpoint (`bridge_core/cc_endpoint.py`) asks the cart's revision with the version command once
+  the game is in play and leaves $07FE out of the snapshot until the cart says revision 1 or later.
+
 ## Tests
 
 - `tests/test_extended_patch.py` runs the shipped IPS's bank 4 and bank 7 code on a 6502 (py65,
@@ -45,14 +73,18 @@ Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None
   write commands, the version, the guarded write (holds, fails, no guards, the largest frame,
   actions above 5), the statistics block left alone with every byte $AB, four freezes and a refused
   fifth, bank 5 left exactly as vanilla, and `CCClient` and `bridge_cli patch-check` against the
-  cart's own code. Set
-  `Z1RR_VANILLA_PRG0` to a vanilla PRG0 ROM. Against beta 8's IPS, every new test fails and co-op's
+  cart's own code; also the shipped IPS and manifest rebuilding from beta 8's, and a beta 8 ROM
+  re-patched to exactly the vanilla-patched ROM. Set `Z1RR_VANILLA_PRG0` to a vanilla PRG0 ROM. Against beta 8's IPS, every new test fails and co-op's
   pass.
+- `tests/test_cc_endpoint.py`: $07FE kept on a revision-1 cart, left out on a beta 8 one.
 - The manifest validates PRG0 and PRG1 (`extend_patch.py --prg1` checks every site).
+- What the py65 harness can't show: it maps only banks 4 and 7 and stubs the game's NMI and the
+  hook's continuation, so bank switching, NMI timing, the game's own use of zero page $00-$05,
+  reset and power-on, and EverDrive SRAM saving are for the hardware check.
 
 ## Hardware check (EverDrive N8 Pro, Windows)
 
-1. Patch a vanilla ROM with this bridge (`python -m bridge_cli patch zelda.nes -o zelda_r1.nes`,
+1. Patch a vanilla ROM (or one beta 8 patched) with this bridge (`python -m bridge_cli patch zelda.nes -o zelda_r1.nes`,
    or the GUI's EDN8 flow) and start a game; stay on the overworld, not paused.
 2. `python -m bridge_cli patch-check --port COMx`: it prints the version (first byte `01`) and two
    PASS lines, a guarded write that happens and one that doesn't, on $7F96 (an unused byte of the
@@ -65,5 +97,9 @@ Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None
 
 ## For randomizers
 
-ZORA's reserved ranges (`docs/rom-map.md` "Reserved for z1rr-coop") gain bank 4 $B883-$B8DA and
-SRAM $7F9E, and lose CPU RAM $07FE, SRAM $7F00-$7F3F, and bank 5's $B366-$B369 and $B8F0-$B901.
+A randomizer that keeps this patch's bytes clear now also needs bank 4 $B883-$B8DA (the guarded
+write) and SRAM $7F9E, and no longer needs CPU RAM $07FE, SRAM $7F00-$7F3F, or bank 5's
+$B366-$B369 and $B8F0-$B901 (while beta 8's bridge is in use, keep those as well). Z1R's flagsets
+were audited against beta 8's ranges only (`relocate_patch.py`); about 45 local Z1R and ZORA seeds
+showed no conflict at $B883-$B8DA, but the full flagset matrix has not been checked. ZORA keeps
+the list in its `docs/rom-map.md` (ZORA's repository).

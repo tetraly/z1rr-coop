@@ -28,9 +28,9 @@ Four changes, none to how co-op works:
 The version command's answer changes from 00 00 10 10 08 to 01 00 10 10 08: the first byte, 0 in
 the Crowd Control original, is this patch's revision.
 
-The script applies the current IPS to vanilla PRG0, checks every byte it changes still holds the
-beta 8 value (so it refuses to run twice, or on another patch), and rewrites the IPS and its
-expected-vanilla manifest in place.
+The script applies beta 8's IPS (kept as zelda_z1rr_coop_beta8.ips) to vanilla PRG0, checks every
+byte it changes still holds the beta 8 value (so it refuses any other base), and writes the shipped
+IPS and its expected-vanilla manifest; tests/test_extended_patch.py checks they reproduce.
 
 Usage:
     python extend_patch.py <vanilla PRG0 .nes> [--prg1 <vanilla PRG1 .nes>] [--base-ips <beta 8 .ips>]
@@ -49,6 +49,8 @@ from bridge_core.ips import apply, parse
 from bridge_core.ips_build import make_ips
 
 PATCH_PATH = Path(__file__).parent / "bridge_core" / "patches" / "zelda_z1rr_coop.ips"
+# beta 8's IPS, kept so this script can rebuild PATCH_PATH and the bridge can recognize ROMs it patched
+BETA8_PATCH_PATH = PATCH_PATH.with_name("zelda_z1rr_coop_beta8.ips")
 VANILLA_SHA1S = {
     "prg0": "dab79c84934f9aa5db4e7dad390e5d0c12443fa2",
     "prg1": "3701381a82fc7d52b2dd3e8892047b30a114ab43",
@@ -255,8 +257,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("vanilla", help="vanilla PRG0 Legend of Zelda ROM")
     parser.add_argument("--prg1", help="vanilla PRG1 ROM, to check every patch site matches PRG0")
-    parser.add_argument("--base-ips", type=Path, default=PATCH_PATH,
-                        help="beta 8's IPS to extend (default: the shipped one, if not extended yet)")
+    parser.add_argument("--base-ips", type=Path, default=BETA8_PATCH_PATH, help="beta 8's IPS to extend")
     args = parser.parse_args()
     vanilla = Path(args.vanilla).read_bytes()
     if hashlib.sha1(vanilla).hexdigest() != VANILLA_SHA1S["prg0"]:

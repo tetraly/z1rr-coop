@@ -1,0 +1,30 @@
+{
+  "patch_name": "z1rr-coop",
+  "ips": "zelda_z1rr_coop_beta8.ips",
+  "vanilla_sha1": {
+    "prg0": "dab79c84934f9aa5db4e7dad390e5d0c12443fa2",
+    "prg1": "3701381a82fc7d52b2dd3e8892047b30a114ab43"
+  },
+  "expected": {
+    "0x006243": "ad9e04",
+    "0x006440": "ffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x01347F": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x0135B9": "ffffffffffffffff",
+    "0x0135C2": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x0136B2": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x01386E": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x017376": "a9608500",
+    "0x017900": "ffffffffffffffffffffffffffffffffffff",
+    "0x01AAF8": "2424242424242424",
+    "0x01B110": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "0x01E66A": "b5f8c502",
+    "0x01ED9A": "05",
+    "0x01ED9F": "e6b1",
+    "0x01EDA2": "c06c",
+    "0x01FAF4": "ffffffff",
+    "0x01FAF9": "ffffffffffff",
+    "0x01FFE4": "ffffffff",
+    "0x01FFE9": "ffffff",
+    "0x02000A": "84e4"
+  }
+}

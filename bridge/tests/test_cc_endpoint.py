@@ -61,3 +61,51 @@ def test_cc_endpoint_closes_client():
     endpoint.close()
 
     assert client.closed is True
+
+
+class AnsweringSerial:
+    """The mock cart's serial port, answering each frame as soon as the bridge writes it."""
+
+    def __init__(self, server: MockCCServer) -> None:
+        self.server = server
+
+    def write(self, data: bytes) -> int:
+        written = self.server.serial.write(data)
+        self.server.step()
+        return written
+
+    def read(self, n: int = 1) -> bytes:
+        return self.server.serial.read(n)
+
+    @property
+    def in_waiting(self) -> int:
+        return self.server.serial.in_waiting
+
+    def close(self) -> None:
+        self.server.serial.close()
+
+
+def _endpoint_on_cart(patch_revision: int) -> tuple[CCMemoryEndpoint, MockCCServer]:
+    server = MockCCServer(patch_revision=patch_revision)
+    server.set_ram(0x07FD, b"\x11\x22")
+    return CCMemoryEndpoint(CCClient(AnsweringSerial(server))), server
+
+
+def test_a_revision_1_cart_reports_07fe_as_game_data():
+    endpoint, _server = _endpoint_on_cart(patch_revision=1)
+    assert endpoint.read_ranges([(0x07FD, 2)], timeout_ms=50) == {0x07FD: 0x11, 0x07FE: 0x22}
+    assert endpoint.patch_revision == 1
+
+
+def test_a_beta_8_cart_leaves_out_its_flag_byte():
+    """Beta 8's patch flag sits at $07FE: tloz_all must not OR it into the partner's room $7F."""
+    endpoint, _server = _endpoint_on_cart(patch_revision=0)
+    assert endpoint.read_ranges([(0x07FD, 2)], timeout_ms=50) == {0x07FD: 0x11}
+    assert endpoint.patch_revision == 0
+
+
+def test_reads_without_07fe_never_ask_the_version():
+    client = FakeCCClient()
+    endpoint = CCMemoryEndpoint(client)
+    endpoint.read_ranges([(0x0012, 1)])
+    assert endpoint.patch_revision is None

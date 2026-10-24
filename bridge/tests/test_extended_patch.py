@@ -278,3 +278,36 @@ def test_bank_5_is_vanilla():
     patched = apply(vanilla, PATCH_PATH.read_bytes())
     bank_5 = slice(INES_HEADER + 5 * BANK_SIZE, INES_HEADER + 6 * BANK_SIZE)
     assert patched[bank_5] == vanilla[bank_5]
+
+
+# --- the shipped files ---------------------------------------------------------------------------
+
+def test_the_shipped_patch_rebuilds_from_beta_8():
+    """extend_patch.py on the kept beta 8 IPS gives exactly the shipped IPS and manifest."""
+    import io
+    import json
+    from bridge_core.ips_build import make_ips
+    from extend_patch import BETA8_PATCH_PATH, extend, manifest
+    vanilla = _vanilla()
+    ips = make_ips(vanilla, extend(vanilla, BETA8_PATCH_PATH.read_bytes()))
+    assert ips == PATCH_PATH.read_bytes()
+    shipped = json.loads(PATCH_PATH.with_suffix(".expected.json").read_text())
+    assert manifest(vanilla, ips, PATCH_PATH.name) == shipped
+
+
+def test_a_beta_8_rom_is_re_patched_from_its_original():
+    from bridge_core import patch_revisions
+    from extend_patch import BETA8_PATCH_PATH
+    vanilla = _vanilla()
+    beta8_rom = apply(vanilla, BETA8_PATCH_PATH.read_bytes())
+    prepared = patch_revisions.prepare_rom(beta8_rom)
+    assert prepared.replaced_release == "2.0 beta 8" and not prepared.already_patched
+    assert prepared.rom == apply(vanilla, PATCH_PATH.read_bytes())
+    assert patch_revisions.prepare_rom(prepared.rom).already_patched
+    assert patch_revisions.prepare_rom(vanilla).replaced_release is None
+
+
+def test_patched_names():
+    from bridge_core.patch_revisions import patched_path
+    assert patched_path(Path("zelda.nes")).name == "zelda_emucoop.nes"
+    assert patched_path(Path("zelda_emucoop.nes")).name == "zelda_emucoop.nes"

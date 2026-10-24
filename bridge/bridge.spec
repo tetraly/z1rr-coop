@@ -13,6 +13,8 @@ a = Analysis(
         ('assets/ganon_blue.ico', 'assets'),
         ('bridge_core/patches/zelda_z1rr_coop.ips', 'bridge_core/patches'),
         ('bridge_core/patches/zelda_z1rr_coop.expected.json', 'bridge_core/patches'),
+        ('bridge_core/patches/zelda_z1rr_coop_beta8.ips', 'bridge_core/patches'),
+        ('bridge_core/patches/zelda_z1rr_coop_beta8.expected.json', 'bridge_core/patches'),
         ('bridge_core/mister_payload/manifest.json', 'bridge_core/mister_payload'),
         ('bridge_core/mister_payload/mister-helper.py', 'bridge_core/mister_payload'),
         ('bridge_core/mister_payload/NES_z1rr-coop.rbf', 'bridge_core/mister_payload'),

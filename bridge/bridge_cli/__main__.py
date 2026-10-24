@@ -25,7 +25,7 @@ from pathlib import Path
 import serial
 
 from bridge_core import __version__
-from bridge_core import ips
+from bridge_core import ips, patch_revisions
 from bridge_core.cc_client import PATCH_REVISION, CCClient
 from bridge_core.cc_endpoint import CCMemoryEndpoint
 from bridge_core.edn8_overload import tloz_all_overload_options
@@ -60,18 +60,8 @@ DEFAULT_RELAY = "coop.z1rracing.com"
 
 def cmd_patch(args: argparse.Namespace) -> int:
     src = Path(args.input).read_bytes()
-    patches_dir = Path(__file__).parent.parent / "bridge_core" / "patches"
-    patch_bytes = (patches_dir / "zelda_z1rr_coop.ips").read_bytes()
-    expected = ips.load_expected_manifest(
-        (patches_dir / "zelda_z1rr_coop.expected.json").read_bytes()
-    )
-    if ips.is_patched(src, patch_bytes):
-        print(f"Already patched: {args.input}")
-        if args.output:
-            Path(args.output).write_bytes(src)
-        return 0
     try:
-        out = ips.apply_validated(src, patch_bytes, expected)
+        prepared = patch_revisions.prepare_rom(src)
     except ips.RomConflict as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         print(
@@ -81,9 +71,15 @@ def cmd_patch(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    out_path = args.output or args.input.replace(".nes", "_emucoop.nes")
-    Path(out_path).write_bytes(out)
-    print(f"Patched: {args.input} -> {out_path}")
+    if prepared.already_patched:
+        print(f"Already patched: {args.input}")
+        if args.output:
+            Path(args.output).write_bytes(src)
+        return 0
+    out_path = args.output or str(patch_revisions.patched_path(Path(args.input)))
+    Path(out_path).write_bytes(prepared.rom)
+    again = f" (re-patched from the {prepared.replaced_release} bridge's patch)" if prepared.replaced_release else ""
+    print(f"Patched: {args.input} -> {out_path}{again}")
     return 0
 
 

@@ -18,9 +18,10 @@ P = 0x2B
 class MockCCServer:
     """Simulates the cart-side of the CC protocol against a MockSerial."""
 
-    def __init__(self, ram_size: int = 0x0800) -> None:
+    def __init__(self, ram_size: int = 0x0800, patch_revision: int = 1) -> None:
         self.serial = MockSerial()
         self.ram = bytearray(ram_size)
+        self.patch_revision = patch_revision      # the version answer's first byte (beta 8: 0)
         self._tx_carryover = bytearray()  # partial frames from bridge that haven't completed yet
 
     def set_ram(self, addr: int, value: int | bytes) -> None:
@@ -117,6 +118,9 @@ class MockCCServer:
             data = body[3:3 + count]
             self.ram[base:base + len(data)] = data
             self._respond(mid, 0x03, b"\x01")
+        elif action == 0xFE:
+            # Version: five bytes, the first the patch revision (extend_patch.py)
+            self._respond(mid, 0xFE, bytes((self.patch_revision, 0x00, 0x10, 0x10, 0x08)))
         elif action == 0x05:
             # Guarded write: G + G (2-byte addr + val), then W + W (2-byte addr + val)
             def triples(at: int) -> tuple[list[tuple[int, int]], int]:
