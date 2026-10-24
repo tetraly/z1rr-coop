@@ -109,3 +109,13 @@ def test_reads_without_07fe_never_ask_the_version():
     endpoint = CCMemoryEndpoint(client)
     endpoint.read_ranges([(0x0012, 1)])
     assert endpoint.patch_revision is None
+
+
+def test_an_unanswered_version_keeps_07fe_out_and_asks_again():
+    endpoint, server = _endpoint_on_cart(patch_revision=1)
+    answer = server._respond
+    server._respond = lambda mid, action, values: None if action == 0xFE else answer(mid, action, values)
+    assert endpoint.read_ranges([(0x07FD, 2)], timeout_ms=50) == {0x07FD: 0x11}
+    assert endpoint.patch_revision is None
+    server._respond = answer
+    assert endpoint.read_ranges([(0x07FD, 2)], timeout_ms=50) == {0x07FD: 0x11, 0x07FE: 0x22}

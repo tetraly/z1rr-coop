@@ -55,3 +55,13 @@ def test_fceux_lua_modes_are_z1_only():
     assert "modes.tloz_basic" in index
     assert "modes.lttp" not in index
     assert "modes.super_metroid" not in index
+
+
+def test_bridge_spec_bundles_every_patch_file():
+    """The exe reads every shipped patch, beta 8's included (patch_revisions.py), on ROM select."""
+    bridge = Path(__file__).resolve().parents[1]
+    spec = (bridge / "bridge.spec").read_text(encoding="utf-8")
+    patches = sorted(p.name for p in (bridge / "bridge_core" / "patches").iterdir() if p.suffix in (".ips", ".json"))
+    assert len(patches) == 4
+    for name in patches:
+        assert f"'bridge_core/patches/{name}', 'bridge_core/patches'" in spec, name

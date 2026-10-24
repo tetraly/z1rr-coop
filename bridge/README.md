@@ -53,7 +53,7 @@ python -m bridge_cli patch zelda.nes -o zelda_CC.nes
 # Run a session
 python -m bridge_cli run --mode tloz_all --port COM3 --code mycode
 
-# Check a cart's patch (revision, guarded write); the game in play, not paused
+# Check a cart's patch (revision, guarded write) with a game in play
 python -m bridge_cli patch-check --port COM3
 
 # Deploy MiSTer helper/core payload

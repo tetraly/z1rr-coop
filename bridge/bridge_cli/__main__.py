@@ -76,7 +76,7 @@ def cmd_patch(args: argparse.Namespace) -> int:
         if args.output:
             Path(args.output).write_bytes(src)
         return 0
-    out_path = args.output or str(patch_revisions.patched_path(Path(args.input)))
+    out_path = args.output or str(patch_revisions.patched_path(Path(args.input), prepared.replaced_release is not None))
     Path(out_path).write_bytes(prepared.rom)
     again = f" (re-patched from the {prepared.replaced_release} bridge's patch)" if prepared.replaced_release else ""
     print(f"Patched: {args.input} -> {out_path}{again}")
@@ -99,14 +99,14 @@ PATCH_CHECK_BYTE = 0x7F96    # unused byte of the patch's own SRAM page: safe to
 
 
 def cmd_patch_check(args: argparse.Namespace) -> int:
-    """Hardware check of the extended patch (extend_patch.py), run with the game in play
-    (overworld, not paused): the revision, then a guarded write that must happen and one that
+    """Hardware check of the extended patch (extend_patch.py), run with the game in play (pausing is
+    fine; the title screen, menus and screen transitions don't answer): the revision, then a guarded write that must happen and one that
     must not, on a byte nothing else uses, which it puts back."""
     sp = serial.Serial(args.port, baudrate=args.baud, timeout=0)
     cc = CCClient(sp)
     version = cc.version()
     if version is None:
-        print("FAIL: no answer to the version command (is the game in play, not paused?)")
+        print("FAIL: no answer to the version command (is a game in play, not on the title screen?)")
         return 1
     print(f"version: {version.hex(' ')}")
     if version[0] != PATCH_REVISION:
@@ -507,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     p_read.add_argument("--length", type=int, default=1)
 
     p_patch_check = sub.add_parser(
-        "patch-check", help="Check the extended patch's guarded write on the cart (game in play)")
+        "patch-check", help="Check the extended patch's guarded write on the cart (a game in play)")
     p_patch_check.add_argument("--port", required=True)
     p_patch_check.add_argument("--baud", type=int, default=115200)
 

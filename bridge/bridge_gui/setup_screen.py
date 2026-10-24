@@ -223,7 +223,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             self._status_label.configure(
                 text=(
                     f"ROM was patched by the {older[0]} bridge. Will re-patch it for this bridge and "
-                    f"save as {patch_revisions.patched_path(self._rom_path).name} when you click Continue."
+                    f"save as {patch_revisions.patched_path(self._rom_path, replacing_older=True).name} when you click Continue."
                 ),
                 text_color="gray",
             )
@@ -264,7 +264,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             )
             return
         if not prepared.already_patched:
-            out_path = patch_revisions.patched_path(self._rom_path)
+            out_path = patch_revisions.patched_path(self._rom_path, prepared.replaced_release is not None)
             out_path.write_bytes(prepared.rom)
             self._patched_path = out_path
             again = f" (re-patched from the {prepared.replaced_release} bridge's)" if prepared.replaced_release else ""

@@ -102,6 +102,10 @@ def record_changed(
 from bridge_core.memory_endpoint import MemoryEndpoint
 from bridge_core.sync_probe import endpoint_error, read_running_byte
 
+# The 2.0 beta 8 EDN8 patch's "message waiting" flag: $07FE (room $7F's saved flags in the levels 7-9
+# block) reads $AB during every command on such a cart (cc_endpoint.py).
+REVISION_0_FLAG, REVISION_0_FLAG_SET = 0x07FE, 0xAB
+
 
 @dataclass
 class IncomingApplyResult:
@@ -263,6 +267,11 @@ class SyncEngine:
         if invalid_reason:
             result.status = "implausible"
             result.messages = [f"Ignoring implausible partner change: {invalid_reason}"]
+            return result
+        if addr == REVISION_0_FLAG and incoming_value == REVISION_0_FLAG_SET:
+            # A beta 8 EDN8 partner's own patch flag, read as room $7F's saved flags (it resends it
+            # after a reconnect): ORing it in would mark that room in this player's save.
+            result.status = "partner_patch_flag"
             return result
         if (
             not _bypass_map_write_gate

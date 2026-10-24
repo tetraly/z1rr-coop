@@ -33,8 +33,8 @@ match, makes every write. It answers with one value byte through the freeze comm
   `SaveRamEnd` marker ($A5), and if it is lost, the game clears $6530-$7FFF at the next power-on.
   `CCClient.send_guarded_write` refuses a frame that would reach it: at most 30 guards and writes
   together. Archipelago's ZORA client needs at most 12 guards and 3 writes.
-- **When it runs.** Like every command, only on frames where `UpdateHeartsAndRupees` runs
-  (play), not on the title screen or during transitions; a command sent then waits, and the next
+- **When it runs.** Like every command, only on frames where `UpdateHeartsAndRupees` runs (play,
+  paused included), not on the title screen, the menus or during transitions; a command sent then waits, and the next
   frame's message replaces it.
 
 Host side: `CCClient.guarded_write(writes, guards)` returns True, False, or None on a timeout
@@ -54,6 +54,10 @@ the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` st
   Beta 8 dropped it. In co-op this is almost always a read, whose late answer the bridge ignores
   (its MID is stale); the bridge sends writes only while it sees the game running. A guarded write
   re-checks its guards when it runs.
+- **Relaunching from the EverDrive menu** (or the bridge's auto-launch) may behave like a reset:
+  whether it keeps $07FF, and whether the cart's saved SRAM brings back $7F9E = $AB with a stale
+  message, is for the hardware check. The same rule applies: a stale command, almost always a read,
+  runs once on the first frame of play.
 
 ## Earlier patches and mixed carts
 
@@ -65,6 +69,20 @@ the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` st
   that into the partner's room $7F of levels 7-9 (as it does today with any beta 8 EDN8). The EDN8
   endpoint (`bridge_core/cc_endpoint.py`) asks the cart's revision with the version command once
   the game is in play and leaves $07FE out of the snapshot until the cart says revision 1 or later.
+  A beta 8 bridge still sends its own cart's $AB there when its partner reconnects (its resync
+  resends every non-zero byte), so the sync engine ignores an incoming $07FE of exactly $AB
+  (`sync_engine.REVISION_0_FLAG`); any other value is synced as before.
+
+## Known, unchanged from beta 8
+
+- **Hearts refill twice as fast on an EDN8.** The main-loop hook is reached by `JSR` from
+  `UpdateHeartsAndRupees` ($ED8E) but ends with `JMP $FAE4`, the displaced original code, which
+  then returns to $ED91, whose `JMP $FAE4` runs it again: `World_FillHearts` and
+  `World_ChangeRupees` run twice a frame. Measured in ZORA's emulator: `HeartPartial` gains 48 in
+  4 frames of a refill with the patch (beta 8 and revision 1 alike), 24 without. Rupees count at
+  the normal rate, because `World_ChangeRupees` returns when the frame's tile buffer is taken.
+  Ending the hook with `RTS` instead would fix it; that changes EDN8 play, so it is left to the
+  maintainer.
 
 ## Tests
 
@@ -85,13 +103,15 @@ the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` st
 ## Hardware check (EverDrive N8 Pro, Windows)
 
 1. Patch a vanilla ROM (or one beta 8 patched) with this bridge (`python -m bridge_cli patch zelda.nes -o zelda_r1.nes`,
-   or the GUI's EDN8 flow) and start a game; stay on the overworld, not paused.
+   or the GUI's EDN8 flow) and start a game; stay in play (pausing is fine).
 2. `python -m bridge_cli patch-check --port COMx`: it prints the version (first byte `01`) and two
    PASS lines, a guarded write that happens and one that doesn't, on $7F96 (an unused byte of the
    patch's page), which it then restores.
 3. Co-op regression: an EDN8 <-> FCEUX `tloz_all` session for at least 15 minutes, through a
    level, a save, a reset and Continue, as for any bridge release.
-4. If the ROM is a ZORA seed: play into levels 7-9 and check room $7F keeps its item taken after a
+4. Relaunch the game from the EverDrive menu with the bridge running, and check the first poll
+   after it behaves (at most one stale read answered or timed out).
+5. If the ROM is a ZORA seed: play into levels 7-9 and check room $7F keeps its item taken after a
    save (the $07FE fix), and that the statistics screen's times survive a power cycle (the slots).
    With Pegasus Boots on, the bridge now accepts the ROM and the boots run (the speed hook).
 

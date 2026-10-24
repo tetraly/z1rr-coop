@@ -310,4 +310,7 @@ def test_a_beta_8_rom_is_re_patched_from_its_original():
 def test_patched_names():
     from bridge_core.patch_revisions import patched_path
     assert patched_path(Path("zelda.nes")).name == "zelda_emucoop.nes"
-    assert patched_path(Path("zelda_emucoop.nes")).name == "zelda_emucoop.nes"
+    assert patched_path(Path("zelda_emucoop.nes"), replacing_older=True).name == "zelda_emucoop.nes"
+    # an unpatched ROM that happens to end in _emucoop is never overwritten
+    assert patched_path(Path("zelda_emucoop.nes")).name == "zelda_emucoop_emucoop.nes"
+    assert patched_path(Path("ZELDA.NES")).name == "ZELDA_emucoop.nes"

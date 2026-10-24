@@ -59,7 +59,11 @@ def prepare_rom(rom: bytes) -> PreparedRom:
                        replaced_release=older[0] if older else None)
 
 
-def patched_path(rom_path: Path) -> Path:
-    """Where the patched ROM goes: <name>_emucoop.nes beside the input. An earlier bridge's
-    <name>_emucoop.nes is replaced by this bridge's, not given a second suffix."""
-    return rom_path.with_name(rom_path.stem.removesuffix(PATCHED_SUFFIX) + PATCHED_SUFFIX + ".nes")
+def patched_path(rom_path: Path, replacing_older: bool = False) -> Path:
+    """Where the patched ROM goes: <name>_emucoop.nes beside the input. A ROM an earlier bridge
+    patched (`replacing_older`) keeps its <name>_emucoop.nes (replaced in place, on disk and on the
+    SD card); any other input, whatever its name, is never overwritten."""
+    stem = rom_path.stem
+    if replacing_older and stem.lower().endswith(PATCHED_SUFFIX):
+        return rom_path.with_suffix(".nes")
+    return rom_path.with_name(stem + PATCHED_SUFFIX + ".nes")

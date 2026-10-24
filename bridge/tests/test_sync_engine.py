@@ -382,3 +382,16 @@ def test_sync_engine_running_state_resets_not_running_debounce():
     assert engine.observe_not_running() is False
     assert engine.observe_not_running() is False
     assert engine.did_cache is True
+
+
+def test_sync_engine_ignores_a_beta_8_partners_patch_flag():
+    """A beta 8 EDN8 partner resends its $07FE (its patch flag, always $AB) after a reconnect; it
+    must not mark room $7F of levels 7-9 here. Any other value there is synced as before."""
+    engine, endpoint = make_engine({0x0012: 0x05, 0x07FE: 0x00})
+    engine.cache[0x07FE] = 0
+
+    assert engine.handle_table_result({"addr": 0x07FE, "value": 0xAB}).status == "partner_patch_flag"
+    assert endpoint.read_byte(0x07FE) == 0
+
+    engine.handle_table({"addr": 0x07FE, "value": 0x80})
+    assert endpoint.read_byte(0x07FE) == 0x80

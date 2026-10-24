@@ -1,15 +1,15 @@
+# Unreleased: EDN8 patch revision 1
+
+- **New EDN8 patch (revision 1).** Adds a guarded-write command (for Archipelago), shrinks the freeze slots to four at $7F40-$7F7F, moves the patch's flag off $07FE (which erased room $7F's saved flags in levels 7-9), and drops the unused Crowd Control speed hook, so ROMs with Pegasus Boots or Red Bubble Curse: Slow Speed are accepted. Co-op's sync is unchanged. Details: `bridge/docs/patch-revision-1.md`.
+- **ROMs patched by beta 8** are re-patched from their original when chosen; the beta 8 bridge refuses ROMs patched by this one.
+- **Beta 8 carts paired with newer ones:** the bridge no longer syncs a beta 8 cart's own $07FE (its patch flag), and ignores that flag's $AB when a beta 8 EDN8 partner sends it; it put a stray $AB into room $7F of levels 7-9.
+- **`bridge_cli patch-check`** checks a cart's patch revision and guarded write.
+
 # z1rr-coop v2.0 beta 8 - release notes
 
 Eighth community-testing build of the z1rr-coop bridge. Beta8 focuses on hardware-session stability and diagnostics after live EDN8 and MiSTer testing: better MiSTer setup checks, clearer live diagnostics, EDN8 `tloz_all` overload protection, newer EDN8 firmware COM detection, and bridge message parity with FCEUX.
 
 This is a pre-release. Keep bridge diagnostics handy while validating hardware sessions, especially MiSTer helper/core setup and EDN8 `tloz_all`.
-
-## Unreleased: EDN8 patch revision 1
-
-- **New EDN8 patch (revision 1).** Adds a guarded-write command (for Archipelago), shrinks the freeze slots to four at $7F40-$7F7F, moves the patch's flag off $07FE (which erased room $7F's saved flags in levels 7-9), and drops the unused Crowd Control speed hook, so ROMs with Pegasus Boots or Red Bubble Curse: Slow Speed are accepted. Co-op's sync is unchanged. Details: `bridge/docs/patch-revision-1.md`.
-- **ROMs patched by beta 8** are re-patched from their original when chosen; the beta 8 bridge refuses ROMs patched by this one.
-- **Beta 8 carts paired with newer ones:** the bridge no longer syncs a beta 8 cart's $07FE (its patch flag), which put a stray $AB into the partner's room $7F.
-- **`bridge_cli patch-check`** checks a cart's patch revision and guarded write.
 
 ## Which file do I download?
 
