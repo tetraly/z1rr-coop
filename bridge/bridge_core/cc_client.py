@@ -7,7 +7,8 @@ CC frame format (host -> cart, wrapped in a USB MEM_WR to ADDR_FIFO):
     L (1 byte)       = body length INCLUDING the trailing checksum byte
     MID (1 byte)     = monotonic message id, 1..255
     ACTION (1 byte)  = 0x00 read addrs, 0x01 read array, 0x02 write pairs,
-                       0x03 write array, 0x04 freeze, 0xFE version
+                       0x03 write array, 0x04 freeze, 0x05 guarded write
+                       (extend_patch.py), 0xFE version
     payload...
     CHECKSUM (1 byte) = sum(MID + ACTION + payload) mod 256
 
@@ -35,6 +36,13 @@ from typing import Protocol
 ADDR_FIFO = 0x01810000
 CMD_MEM_WR = 0x1A
 P = 0x2B
+
+ACTION_GUARDED_WRITE = 0x05
+ACTION_VERSION = 0xFE
+VERSION_LENGTH = 5
+PATCH_REVISION = 0x01        # the version's first byte once extend_patch.py's changes are in
+# MID..checksum land at $7FA0-$7FFE; $7FFF is the game's SaveRamEnd marker ($A5)
+MAX_GUARDED_BODY = 0x7FFF - 0x7FA0
 
 
 class SerialLike(Protocol):
@@ -130,6 +138,46 @@ class CCClient:
         mid = self._next_mid()
         payload = bytes((len(data) & 0xFF, base & 0xFF, (base >> 8) & 0xFF)) + data
         self._usb_mem_wr(ADDR_FIFO, _make_cc_frame(mid, 0x03, payload))
+
+    def send_guarded_write(self, writes: list[tuple[int, int]], guards: list[tuple[int, int]]) -> None:
+        """Action 0x05 (extended patch, revision 1): in one game frame, make every (addr, value)
+        write only if every (addr, value) guard still holds. Guards read their address, so they
+        belong on RAM. The cart stores MID..checksum at $7FA0; a frame body over
+        MAX_GUARDED_BODY bytes would reach $7FFF, the game's save-RAM marker, so it is refused."""
+        payload = bytes((len(guards),))
+        for addr, val in guards:
+            payload += bytes((addr & 0xFF, (addr >> 8) & 0xFF, val & 0xFF))
+        payload += bytes((len(writes),))
+        for addr, val in writes:
+            payload += bytes((addr & 0xFF, (addr >> 8) & 0xFF, val & 0xFF))
+        if len(payload) + 3 > MAX_GUARDED_BODY:
+            raise ValueError(f"guarded write too large: {len(guards)} guards + {len(writes)} writes "
+                             f"(at most {(MAX_GUARDED_BODY - 5) // 3} together)")
+        mid = self._next_mid()
+        self._usb_mem_wr(ADDR_FIFO, _make_cc_frame(mid, ACTION_GUARDED_WRITE, payload))
+        self._expected_mid = mid
+        self._expected_action = ACTION_GUARDED_WRITE
+        self._expected_values = 1
+
+    def guarded_write(self, writes: list[tuple[int, int]], guards: list[tuple[int, int]],
+                      timeout_ms: int = 500) -> bool | None:
+        """True if the cart made the writes, False if a guard failed (nothing written), None on
+        a timeout (unknown: read again before retrying)."""
+        self.send_guarded_write(writes, guards)
+        answer = self.poll_response(timeout_ms=timeout_ms)
+        if answer is None or len(answer) != 1:
+            return None
+        return answer[0] == 1
+
+    def version(self, timeout_ms: int = 500) -> bytes | None:
+        """Action 0xFE's five bytes; the first is the patch revision (0 for beta 8 and before,
+        PATCH_REVISION for extend_patch.py's), or None on a timeout."""
+        mid = self._next_mid()
+        self._usb_mem_wr(ADDR_FIFO, _make_cc_frame(mid, ACTION_VERSION, b""))
+        self._expected_mid = mid
+        self._expected_action = ACTION_VERSION
+        self._expected_values = VERSION_LENGTH
+        return self.poll_response(timeout_ms=timeout_ms)
 
     def read_addrs(self, addrs: list[int], timeout_ms: int = 500, chunk_size: int = 100) -> bytes | None:
         """Read N individual addresses; chunks into multiple frames if needed

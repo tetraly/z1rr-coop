@@ -6,6 +6,7 @@ Usage:
                             [--force-send]
   python -m bridge_cli patch <input.nes> -o <output.nes>
   python -m bridge_cli read --port COM3 --addr 0x0657 --length 16
+  python -m bridge_cli patch-check --port COM3
   python -m bridge_cli mister-run --mode tloz_all --mister-host mister.local \
                                   --code mycode
 """
@@ -25,7 +26,7 @@ import serial
 
 from bridge_core import __version__
 from bridge_core import ips
-from bridge_core.cc_client import CCClient
+from bridge_core.cc_client import PATCH_REVISION, CCClient
 from bridge_core.cc_endpoint import CCMemoryEndpoint
 from bridge_core.edn8_overload import tloz_all_overload_options
 from bridge_core.map_write_gate import MapWriteGate
@@ -96,6 +97,44 @@ def cmd_read(args: argparse.Namespace) -> int:
         return 1
     print(" ".join(f"{b:02X}" for b in result))
     return 0
+
+
+PATCH_CHECK_BYTE = 0x7F96    # unused byte of the patch's own SRAM page: safe to write
+
+
+def cmd_patch_check(args: argparse.Namespace) -> int:
+    """Hardware check of the extended patch (extend_patch.py), run with the game in play
+    (overworld, not paused): the revision, then a guarded write that must happen and one that
+    must not, on a byte nothing else uses, which it puts back."""
+    sp = serial.Serial(args.port, baudrate=args.baud, timeout=0)
+    cc = CCClient(sp)
+    version = cc.version()
+    if version is None:
+        print("FAIL: no answer to the version command (is the game in play, not paused?)")
+        return 1
+    print(f"version: {version.hex(' ')}")
+    if version[0] != PATCH_REVISION:
+        print(f"FAIL: patch revision {version[0]}, not {PATCH_REVISION}: patch the ROM with this bridge")
+        return 1
+    before = cc.read_array(PATCH_CHECK_BYTE, 1)
+    if before is None:
+        print("FAIL: read timed out")
+        return 1
+    held, changed = before[0], before[0] ^ 0x5A
+    checks = [
+        ("guard holds: written", cc.guarded_write([(PATCH_CHECK_BYTE, changed)], [(PATCH_CHECK_BYTE, held)]),
+         True, changed),
+        ("guard fails: not written", cc.guarded_write([(PATCH_CHECK_BYTE, 0x00)], [(PATCH_CHECK_BYTE, held)]),
+         False, changed),
+    ]
+    failed = 0
+    for name, answer, want_answer, want_byte in checks:
+        now = cc.read_array(PATCH_CHECK_BYTE, 1)
+        ok = answer is want_answer and now is not None and now[0] == want_byte
+        failed += not ok
+        print(f"{'PASS' if ok else 'FAIL'}: {name} (answer {answer}, byte {now.hex() if now else 'timeout'})")
+    cc.guarded_write([(PATCH_CHECK_BYTE, held)], [])
+    return 1 if failed else 0
 
 
 def cmd_mister_read(args: argparse.Namespace) -> int:
@@ -471,6 +510,11 @@ def main(argv: list[str] | None = None) -> int:
     p_read.add_argument("--addr", type=lambda s: int(s, 0), required=True)
     p_read.add_argument("--length", type=int, default=1)
 
+    p_patch_check = sub.add_parser(
+        "patch-check", help="Check the extended patch's guarded write on the cart (game in play)")
+    p_patch_check.add_argument("--port", required=True)
+    p_patch_check.add_argument("--baud", type=int, default=115200)
+
     p_mister_read = sub.add_parser(
         "mister-read",
         help="One-shot NES RAM read from MiSTer's RA mirror",
@@ -567,6 +611,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_patch(args)
     elif args.cmd == "read":
         return cmd_read(args)
+    elif args.cmd == "patch-check":
+        return cmd_patch_check(args)
     elif args.cmd == "mister-read":
         return cmd_mister_read(args)
     elif args.cmd == "mister-helper":

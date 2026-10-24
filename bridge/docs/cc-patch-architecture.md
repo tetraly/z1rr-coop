@@ -1,5 +1,7 @@
 # CC patch architecture (reverse-engineered)
 
+> **Revision 1:** the shipped patch now has a guarded-write command, four freeze slots at $7F40-$7F7F and its flag at $7F9E instead of $07FE; see `patch-revision-1.md`. The layout below is the original Crowd Control patch's, before relocation.
+
 > **2026-05-06 update:** All "patch experiments" pursued in this doc (h1 — remove `JSR $B58D`; h2 — register save/restore; the larger "the patch is fundamentally broken for sustained polling" framing) were chasing a host-side bug. The actual root cause was a missing checksum byte in our framing. With correct framing the patch sustains 10 Hz polling indefinitely. See `cc-patch-capabilities.md` "Postmortem" section. The disassembly below is preserved for future reference but the **action items at the end of this doc are no longer needed**.
 
 

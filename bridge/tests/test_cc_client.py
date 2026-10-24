@@ -83,3 +83,33 @@ def test_frame_includes_checksum_byte():
     expected_checksum = (1 + 0x00 + 1 + 0x42 + 0x00) & 0xFF
     assert frame[6] == expected_checksum
     assert len(frame) == 7
+
+
+def test_guarded_write_writes_when_the_guards_hold():
+    client, server = make_client_with_mock()
+    server.set_ram(0x067B, 3)
+    client.send_guarded_write([(0x067B, 4), (0x0657, 1)], [(0x067B, 3), (0x0657, 0)])
+    server.step()
+    assert client.poll_response(timeout_ms=100) == b"\x01"
+    assert (server.ram[0x067B], server.ram[0x0657]) == (4, 1)
+
+
+def test_guarded_write_reports_a_failed_guard():
+    client, server = make_client_with_mock()
+    server.set_ram(0x0657, 1)
+    client.send_guarded_write([(0x067B, 4)], [(0x0657, 0)])
+    server.step()
+    assert client.poll_response(timeout_ms=100) == b"\x00"
+    assert server.ram[0x067B] == 0
+
+
+def test_guarded_write_without_an_answer_is_unknown():
+    client, _server = make_client_with_mock()
+    assert client.guarded_write([(0x067B, 4)], [], timeout_ms=10) is None
+
+
+def test_guarded_write_refuses_a_frame_that_reaches_7fff():
+    client, _server = make_client_with_mock()
+    client.send_guarded_write([(0x0600 + i, 0) for i in range(3)], [(0x0700 + i, 0) for i in range(27)])
+    with pytest.raises(ValueError):
+        client.send_guarded_write([(0x0600 + i, 0) for i in range(3)], [(0x0700 + i, 0) for i in range(28)])
