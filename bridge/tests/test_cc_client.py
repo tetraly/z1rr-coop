@@ -1,8 +1,11 @@
 import pytest
 
-from bridge_core.cc_client import CCClient
+from bridge_core.cc_client import MAX_FRAME_LENGTH, CCClient
 
 from .mock_cc_server import MockCCServer
+
+# action $03: MID, action, length, address lo, hi, the bytes, checksum
+MAX_WRITE_ARRAY_BYTES = MAX_FRAME_LENGTH - 6
 
 
 def make_client_with_mock(ram_size: int = 0x0800) -> tuple[CCClient, MockCCServer]:
@@ -113,3 +116,24 @@ def test_guarded_write_refuses_a_frame_that_reaches_7fff():
     client.send_guarded_write([(0x0600 + i, 0) for i in range(3)], [(0x0700 + i, 0) for i in range(27)])
     with pytest.raises(ValueError):
         client.send_guarded_write([(0x0600 + i, 0) for i in range(3)], [(0x0700 + i, 0) for i in range(28)])
+
+
+def test_no_frame_longer_than_the_cart_takes_is_sent():
+    from bridge_core.cc_client import MAX_READ_ADDRS
+    client, server = make_client_with_mock()
+    client.send_write_array(0x0010, bytes(MAX_WRITE_ARRAY_BYTES))
+    with pytest.raises(ValueError):
+        client.send_write_array(0x0010, bytes(MAX_WRITE_ARRAY_BYTES + 1))
+    with pytest.raises(ValueError):
+        client.send_read_addrs(list(range(MAX_READ_ADDRS + 1)))
+
+
+def test_read_addrs_splits_into_frames_the_cart_takes():
+    from bridge_core.cc_client import MAX_READ_ADDRS
+    client, server = make_client_with_mock()
+    sent = []
+    send = client.send_read_addrs
+    client.send_read_addrs = lambda addrs: (sent.append(len(addrs)), send(addrs), server.step())
+    server.set_ram(0x0100, bytes(range(100)))
+    assert client.read_addrs(list(range(0x0100, 0x0164)), timeout_ms=50) == bytes(range(100))
+    assert sent == [MAX_READ_ADDRS, MAX_READ_ADDRS, 100 - 2 * MAX_READ_ADDRS]

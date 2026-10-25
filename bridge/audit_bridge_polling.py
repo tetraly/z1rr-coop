@@ -15,12 +15,12 @@ import argparse
 import time
 from collections.abc import Iterable
 
-from bridge_core.cc_client import CCClient
+from bridge_core.cc_client import MAX_READ_ADDRS, CCClient
 from bridge_core.modes import tloz_all
 from bridge_core.sync_engine import SyncEngine
 
 Range = tuple[int, int]
-ADDRS_CHUNK_SIZE = 100
+ADDRS_CHUNK_SIZE = MAX_READ_ADDRS
 SAFE_ADDRS_RANGE_LIMIT = 64
 
 

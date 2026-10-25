@@ -31,7 +31,7 @@ def test_estimated_cc_transactions_counts_array_ranges():
 
 
 def test_estimated_cc_transactions_counts_addrs_chunks():
-    assert estimated_cc_transactions(tloz_all.READ_RANGES, method="addrs") == 8
+    assert estimated_cc_transactions(tloz_all.READ_RANGES, method="addrs") == 11   # 1 + 1 + 3 x 3 frames of 45 addresses
 
 
 def test_audit_shape_warning_blocks_large_addrs_ranges():

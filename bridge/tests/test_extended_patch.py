@@ -1,14 +1,15 @@
 """The extended patch (extend_patch.py) run on a 6502 (py65): the shipped IPS's bank 4 and bank 7
 code, with the EverDrive's USB FIFO ($40F0 data, $40F1 status) simulated.
 
-Each command goes in as the cart would see it: the NMI drain ($B46F) reads the frame from the FIFO
-into $7FA0 and sets the flag; the main-loop hook ($B495) dispatches it and answers through the FIFO.
-The game's NMI ($E484) and the code the hook continues to ($FAE4) are replaced by RTS.
+Each command goes in as the cart would see it: the NMI drain ($B46F, which jumps to $BA40) reads the
+frame from the FIFO into $7FA0, at most 8 bytes per NMI, and sets the flag once all of it is there;
+the main-loop hook ($B495) checks its checksum, dispatches it and answers through the FIFO. The
+game's NMI ($E484) and the code the hook continues to ($FAE4) are replaced by RTS. Reading the FIFO's
+data while its status says there is nothing to read fails the test: on hardware it returns garbage.
 
-Needs a vanilla PRG0 ROM: Z1RR_VANILLA_PRG0, or the path test_ips.py uses."""
+Needs a vanilla PRG0 ROM: Z1RR_VANILLA_PRG0 or Z1RR_ROM_DIR (tests/vanilla_roms.py)."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,11 @@ py65_memory = pytest.importorskip("py65.memory")
 
 from bridge_core.cc_client import _make_cc_frame
 from bridge_core.ips import apply
-from extend_patch import NEW_FLAG, OLD_FLAG, PATCH_PATH, PATCH_REVISION, VANILLA_SHA1S
+from extend_patch import (
+    DRAIN_BYTES_PER_NMI, DRAIN_INDEX, DRAIN_LENGTH, NEW_FLAG, OLD_FLAG, PATCH_PATH, PATCH_REVISION,
+)
 
-VANILLA_PRG0 = Path(os.environ.get("Z1RR_VANILLA_PRG0",
-                                   r"N:\Games\ROMs\NES\Legend of Zelda, The (U) (PRG0) [!].nes"))
+from .vanilla_roms import vanilla
 INES_HEADER, BANK_SIZE = 16, 0x4000
 FIFO_DATA, FIFO_STATUS = 0x40F0, 0x40F1
 FIFO_READY, FIFO_EMPTY = 0x00, 0x80          # the drain skips a status with bit 7 set
@@ -33,17 +35,15 @@ INIT_LATCH, INITIALIZED = 0x07FF, 0xAB
 FLAG_SET = 0xAB
 REPLY_PRELUDE = bytes((0x2B, 0xD4, 0x22, 0xDD))
 STEP_LIMIT = 200_000
+FRAME_LIMIT = 16                              # NMIs a command may take to arrive (95 bytes: 12)
 FREEZE_SLOTS = (0x7F40, 0x7F50, 0x7F60, 0x7F70)
 STATS_BLOCK = range(0x7F00, 0x7F40)
+SAVE_RAM_END, SAVE_RAM_END_MARK = 0x7FFF, 0xA5
+MMC1_REGISTERS = range(0x8000, 0x8100)        # the first bytes a runaway copy from $7FA0 would reach
 
 
 def _vanilla() -> bytes:
-    if not VANILLA_PRG0.exists():
-        pytest.skip("vanilla PRG0 not available (set Z1RR_VANILLA_PRG0)")
-    import hashlib
-    rom = VANILLA_PRG0.read_bytes()
-    assert hashlib.sha1(rom).hexdigest() == VANILLA_SHA1S["prg0"]
-    return rom
+    return vanilla("prg0")
 
 
 class Cart:
@@ -60,12 +60,20 @@ class Cart:
         self.memory[GAME_NMI] = RTS
         self.memory[HOOK_CONTINUES] = RTS
         self.memory[INIT_LATCH] = INITIALIZED     # past the power-on setup unless a test says not
+        self.memory[SAVE_RAM_END] = SAVE_RAM_END_MARK
         self.incoming = bytearray()
         self.sent = bytearray()
+        self.reads_this_call = 0
         self.memory.subscribe_to_read([FIFO_STATUS], lambda _a: FIFO_READY if self.incoming else FIFO_EMPTY)
-        self.memory.subscribe_to_read([FIFO_DATA], lambda _a: self.incoming.pop(0))
+        self.memory.subscribe_to_read([FIFO_DATA], self._read_fifo)
         self.memory.subscribe_to_write([FIFO_DATA], lambda _a, value: self.sent.append(value))
         self.cpu = py65_mpu.MPU(memory=self.memory)
+
+    def _read_fifo(self, _address: int) -> int:
+        if not self.incoming:
+            raise AssertionError("read the FIFO's data with nothing to read")
+        self.reads_this_call += 1
+        return self.incoming.pop(0)
 
     def __getitem__(self, address: int) -> int:
         return self.memory[address]
@@ -74,6 +82,7 @@ class Cart:
         self.memory[address] = value
 
     def call(self, routine: int) -> None:
+        self.reads_this_call = 0
         self.memory[TRAMPOLINE:TRAMPOLINE + 3] = [JSR, routine & 0xFF, routine >> 8]
         self.cpu.pc = TRAMPOLINE
         for _ in range(STEP_LIMIT):
@@ -85,13 +94,23 @@ class Cart:
     def frame(self) -> None:
         """One NMI: the drain, then (in play) the main-loop hook."""
         self.call(NMI_DRAIN)
+        assert self.reads_this_call <= DRAIN_BYTES_PER_NMI
         self.call(MAIN_LOOP_HOOK)
 
+    def frames_until_read(self) -> None:
+        """Game frames until the FIFO is empty: the frame that takes its last byte also runs it."""
+        for _ in range(FRAME_LIMIT):
+            self.frame()
+            if not self.incoming:
+                return
+        raise AssertionError("the drain never emptied the FIFO")
+
     def command(self, mid: int, action: int, payload: bytes) -> bytes | None:
-        """Send one frame, run one game frame; the values of its answer, or None without one."""
+        """Send one frame, run game frames until it is read; the values of its answer, or None
+        without one."""
         self.incoming += _make_cc_frame(mid, action, payload)
         self.sent.clear()
-        self.frame()
+        self.frames_until_read()
         if not self.sent:
             return None
         assert bytes(self.sent[:4]) == REPLY_PRELUDE
@@ -139,6 +158,82 @@ def test_a_command_left_waiting_at_power_off_is_dropped():
     assert not cart.sent
 
 
+# --- the drain: frames as the USB delivers them ------------------------------------------------------
+# Beta 8's drain read the whole frame on one status check: against its IPS the first five fail (the
+# last checks state only the new drain keeps).
+
+def _untouched_beyond_the_buffer(cart: Cart, mmc1_before: list[int]) -> bool:
+    return (cart[SAVE_RAM_END] == SAVE_RAM_END_MARK
+            and [cart[address] for address in MMC1_REGISTERS] == mmc1_before)
+
+
+def test_a_frame_still_arriving_is_finished_in_the_next_nmi():
+    cart = Cart()
+    cart[0x0657], cart[0xCF] = 0x42, 0x5C        # $CF: the boomerang slot's ObjShoveDir, beta 8's counter
+    frame = _make_cc_frame(1, 0x01, bytes((1, 0x57, 0x06)))
+    cart.incoming += frame[:3]                   # the rest is still on its way when the NMI runs
+    cart.frame()
+    assert (cart[NEW_FLAG], bytes(cart.sent)) == (0x00, b"")
+    cart.incoming += frame[3:]
+    cart.frame()
+    assert cart.sent[-1:] == b"\x42"
+    assert cart[0xCF] == 0x5C
+
+
+def test_a_frame_that_stops_arriving_is_dropped_and_the_next_works():
+    cart = Cart()
+    cart.incoming += _make_cc_frame(1, 0x02, triples([(0x0657, 0x77)]))[:4]
+    cart.frame()
+    cart.frame()                                 # a whole NMI with nothing more: the frame is stale
+    assert (cart[0x0657], bytes(cart.sent)) == (0x00, b"")
+    assert (cart[DRAIN_LENGTH], cart[DRAIN_INDEX]) == (0, 0)
+    assert cart.command(2, 0x02, triples([(0x0658, 0x33)])) == b""
+    assert (cart[0x0657], cart[0x0658]) == (0x00, 0x33)
+
+
+def test_a_length_no_frame_can_have_never_copies_past_7ffe():
+    cart = Cart()
+    mmc1_before = [cart[address] for address in MMC1_REGISTERS]
+    # what a misread used to leave: a "length" of $C8, then bytes of other frames
+    cart.incoming += bytes((0xC8, 0x60, 0xFF, 0x02, 0x00, 0x01))
+    cart.frames_until_read()
+    cart.frame()
+    assert _untouched_beyond_the_buffer(cart, mmc1_before)
+    assert not cart.sent
+    cart[0x0657] = 0x24
+    assert cart.command(3, 0x01, bytes((1, 0x57, 0x06))) == b"\x24"
+
+
+def test_a_frame_with_a_wrong_checksum_runs_nothing():
+    cart = Cart()
+    frame = bytearray(_make_cc_frame(4, 0x02, triples([(0x0657, 0x77)])))
+    frame[-1] ^= 0x01
+    cart.incoming += frame
+    cart.frames_until_read()
+    assert (cart[0x0657], bytes(cart.sent), cart[NEW_FLAG]) == (0x00, b"", 0x00)
+
+
+def test_the_largest_frame_takes_twelve_nmis_of_8_bytes():
+    cart = Cart()
+    guards = [(0x0700 + i, 0) for i in range(27)]
+    cart.incoming += _make_cc_frame(5, 0x05, guarded([(0x0620 + i, 1) for i in range(3)], guards))
+    nmis = 0
+    while cart.incoming:
+        cart.frame()                             # asserts at most 8 FIFO reads per NMI
+        nmis += 1
+    assert nmis == 12 and cart.sent[-1:] == b"\x01"
+
+
+def test_drain_state_left_by_a_power_off_is_dropped():
+    for length, index in ((0xFF, 0xF0), (0x10, 0x10), (0x05, 0x40)):
+        cart = Cart()
+        mmc1_before = [cart[address] for address in MMC1_REGISTERS]
+        cart[DRAIN_LENGTH], cart[DRAIN_INDEX] = length, index
+        cart[0x0657] = 0x31
+        assert cart.command(6, 0x01, bytes((1, 0x57, 0x06))) == b"\x31"
+        assert _untouched_beyond_the_buffer(cart, mmc1_before)
+
+
 # --- co-op's commands still work -------------------------------------------------------------------
 
 def test_read_array_and_write_pairs():
@@ -176,7 +271,7 @@ def test_no_guards_writes_and_largest_frame_fits():
     guards = [(0x0700 + i, 0) for i in range(27)]
     assert cart.command(7, 0x05, guarded([(0x0620 + i, 0x40 + i) for i in range(3)], guards)) == b"\x01"
     assert [cart[0x0620 + i] for i in range(3)] == [0x40, 0x41, 0x42]
-    assert cart[0x7FFF] != 0x05                  # untouched by a 30-pair frame (its checksum ends at $7FFE)
+    assert cart[SAVE_RAM_END] == SAVE_RAM_END_MARK   # untouched by a 30-triple frame (it ends at $7FFE)
 
 
 def test_actions_above_5_are_still_ignored():
@@ -231,7 +326,7 @@ class CartSerial:
             del self.pending[:header + length]
             self.cart.incoming += frame
             self.cart.sent.clear()
-            self.cart.frame()
+            self.cart.frames_until_read()
             self.received += self.cart.sent
         return len(data)
 

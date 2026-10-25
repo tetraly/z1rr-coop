@@ -1,10 +1,11 @@
-# EDN8 patch revision 1: guarded write, four freeze slots, flag off $07FE, no speed hook
+# EDN8 patch revision 1: guarded write, four freeze slots, flag off $07FE, no speed hook, a safe drain
 
 `bridge/extend_patch.py` builds `bridge_core/patches/zelda_z1rr_coop.ips` (and its
 `.expected.json`) from 2.0 beta 8's relocated patch, which is kept beside it as
 `zelda_z1rr_coop_beta8.ips` (with its manifest); `tests/test_extended_patch.py` checks the shipped
-files rebuild byte for byte. Co-op's commands, framing and timing are
-unchanged; everything below is additive or fixes a byte the patch shared with the game. The
+files rebuild byte for byte. Co-op's commands and framing are unchanged; everything below is
+additive, fixes a byte the patch shared with the game, or fixes the drain (the crash found on
+hardware: "The NMI drain" below). The
 version command's first byte, 0 before, is now 1 (`cc_client.PATCH_REVISION`).
 
 ## The changes
@@ -15,7 +16,50 @@ version command's first byte, 0 before, is now 1 (`cc_client.PATCH_REVISION`).
 | Main-loop hook order | dispatch, then the once-only setup and freeze scan ($B5A7) | setup and freeze scan, then dispatch | SRAM keeps the new flag through a power-off and a reset; the setup clears it, and now runs before the dispatcher. Same 21 bytes. See "Power-on and reset" below for what this does and doesn't cover. |
 | Freeze slots | 8, $7F00-$7F7F | 4, $7F40-$7F7F | $7F00-$7F3F is left to the ROM (ZORA's statistics screen keeps its counters there). Before, the power-on setup cleared $7F00/$7F10/$7F20/$7F30, and the per-frame scan treated any of those bytes reaching $AB as an armed slot and wrote through the bytes after it. Nothing in the bridge sends the freeze command; a fifth freeze is refused cleanly (answer 0). |
 | Action $05 | unused (the dispatcher sent actions >= 5 to an `RTS`) | guarded write, $B883-$B8DA in bank 4 | Below. Actions >= 6 still do nothing. |
+| NMI drain | bank 4 $B46F: one status check, then the frame's length and that many bytes; no checksum check | bank 4 $BA40 ($B46F jumps there): the status before every byte, at most 8 bytes per NMI, the frame carried over to the next NMI, lengths outside 3-95 refused; the hook checks the checksum ($BAC0) before dispatching | A frame still arriving was misread and could copy past $7FFF into the MMC1 registers: garbled HUD and palettes, then a crash. Below. |
 | Speed hook | `InitLinkSpeed`'s first two instructions (bank 5 $B366) call a helper at bank 5 $B8F0 that takes Link's speed from $7F93 while $7F92 is $AB (a Crowd Control effect) | vanilla bytes at both | Nothing in z1rr-coop sets $7F92. A randomizer's speed features hook those same instructions (ZORA's Pegasus Boots and Red Bubble Curse: Slow Speed), so with the hook a ZORA ROM using them failed the bridge's manifest check. Bank 5 is now untouched. |
+
+## The NMI drain (the crash found on hardware)
+
+**What players saw** (2026-10-24, EverDrive N8 Pro on OS 2.15, through a Game Genie; beta 8 and
+revision 1 alike): with a partner connected, or with nothing but
+`audit_bridge_polling.py --pattern running --hz 10` (1-byte reads), swinging the sword or firing
+beams soon garbled the HUD (a stray "0 x" at the top left, a tan minimap), sometimes shook the
+screen, and then reset or crashed the game. Single player, and the bridge with no partner, were
+clean. A timeout came with the glitch: one frame got no answer.
+
+**Why.** Beta 8's drain (bank 4 $B46F, run first thing in every NMI) checked the FIFO's status
+once, read the frame's length L, and then read L bytes into $7FA0 without looking at the status
+again. A frame arrives over USB a few bytes at a time; when the NMI caught one part-way, the drain
+read garbage for the bytes not yet there, the frame got no answer (the timeout), and its remaining
+bytes stayed in the FIFO for the next NMI to take as a new length, up to 255. From $7FA0, any
+length over 96 copies past $7FFF (the game's `SaveRamEnd` marker) into $8000 and up, which on
+Zelda's MMC1 are mapper register writes: mirroring and CHR and PRG banks. Even a shorter wrong
+length made the drain copy that many bytes at the start of vblank, crowding out the game's own
+screen updates (the shake), and the dispatcher ran whatever command the garbage spelled, since
+nothing checked the checksum. A sword swing is a busy frame, which is when the game has least
+vblank to spare. krikzz's own FIFO reader checks the status before every byte (EDN8-PRO
+`edio/everdrive_asm.s`, `bmi` on `REG_FIFO_STAT` bit 7, `FIFO_CPU_RXF`).
+
+**Revision 1's drain** (bank 4 $BA40-$BABF; $B46F is now a `JMP` to it, the NMI hook in bank 7
+unchanged):
+- reads a byte only while the status's bit 7 is clear, and keeps the frame it has started in SRAM
+  ($7F97 length, $7F98 bytes read), so the next NMI finishes it;
+- refuses a length under 3 or over 95: the frame then ends at $7FFE at most, and the byte is
+  dropped;
+- drops a frame that got no byte for a whole NMI (the FIFO empty as the NMI starts), and state a
+  power-off left in SRAM that isn't a frame in progress;
+- reads at most 8 bytes per NMI (one co-op frame is 7), at 28 cycles a byte, so it takes about as
+  much of vblank as beta 8's did for one frame, and never more; the largest frame (95 bytes, a
+  guarded write) takes 12 NMIs;
+- sets the flag only when the whole frame is in, with its length in $7F99; the main-loop hook calls
+  the checksum check (bank 4 $BAC0) in place of the dispatcher, which runs the frame only if its
+  last byte is the sum of the others mod 256 (`cc_client._make_cc_frame`), and otherwise drops it
+  without an answer.
+
+The host now refuses to build a frame longer than 95 bytes (`cc_client.MAX_FRAME_LENGTH`), and
+`read_addrs` splits at 45 addresses (`MAX_READ_ADDRS`; it used 100, a 204-byte frame, which beta 8's
+drain also copied past $7FFF). Co-op only ever sends 7-byte frames.
 
 ## Action $05: guarded write
 
@@ -94,6 +138,12 @@ the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` st
   cart's own code; also the shipped IPS and manifest rebuilding from beta 8's, and a beta 8 ROM
   re-patched to exactly the vanilla-patched ROM. Set `Z1RR_VANILLA_PRG0` to a vanilla PRG0 ROM. Against beta 8's IPS, every new test fails and co-op's
   pass.
+- The drain's own tests feed the FIFO the way USB does: a frame finished in the next NMI, one that
+  stops arriving (dropped, the next one works), a length of $C8 followed by other frames' bytes
+  ($7FFF and $8000-$80FF untouched), a wrong checksum (nothing runs), the largest frame (12 NMIs,
+  never more than 8 reads in one), and SRAM state a power-off left. The simulated FIFO fails a test
+  that reads its data with nothing there. Against beta 8's IPS the first five fail, four of them
+  on that read.
 - `tests/test_cc_endpoint.py`: $07FE kept on a revision-1 cart, left out on a beta 8 one.
 - The manifest validates PRG0 and PRG1 (`extend_patch.py --prg1` checks every site).
 - What the py65 harness can't show: it maps only banks 4 and 7 and stubs the game's NMI and the
@@ -111,14 +161,20 @@ the setup runs only while its latch, CPU RAM $07FF, isn't $AB, and `ClearRam` st
    level, a save, a reset and Continue, as for any bridge release.
 4. Relaunch the game from the EverDrive menu with the bridge running, and check the first poll
    after it behaves (at most one stale read answered or timed out).
-5. If the ROM is a ZORA seed: play into levels 7-9 and check room $7F keeps its item taken after a
+5. The drain: with a game in play and no partner, run
+   `uv run python audit_bridge_polling.py --port COMx --pattern running --hz 10 --duration 600 --abort-after-timeouts 1000 --verbose`
+   and swing the sword (Up+A too) and fire beams for 10 minutes. Beta 8 garbled the HUD within a few
+   swings; revision 1 should show no glitch or shake (a rare timeout away from screen changes is a
+   frame dropped, not a fault). Then the same with a partner connected.
+6. If the ROM is a ZORA seed: play into levels 7-9 and check room $7F keeps its item taken after a
    save (the $07FE fix), and that the statistics screen's times survive a power cycle (the slots).
    With Pegasus Boots on, the bridge now accepts the ROM and the boots run (the speed hook).
 
 ## For randomizers
 
 A randomizer that keeps this patch's bytes clear now also needs bank 4 $B883-$B8DA (the guarded
-write) and SRAM $7F9E, and no longer needs CPU RAM $07FE, SRAM $7F00-$7F3F, or bank 5's
+write), bank 4 $BA40-$BAFF (the drain and the checksum check; $BAD9-$BAFF kept free for it) and
+SRAM $7F97-$7F99 and $7F9E, and no longer needs CPU RAM $07FE, SRAM $7F00-$7F3F, or bank 5's
 $B366-$B369 and $B8F0-$B901 (while beta 8's bridge is in use, keep those as well). Z1R's flagsets
 were audited against beta 8's ranges only (`relocate_patch.py`); about 45 local Z1R and ZORA seeds
 showed no conflict at $B883-$B8DA, but the full flagset matrix has not been checked. ZORA keeps

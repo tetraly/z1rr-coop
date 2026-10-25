@@ -41,8 +41,12 @@ ACTION_GUARDED_WRITE = 0x05
 ACTION_VERSION = 0xFE
 VERSION_LENGTH = 5
 PATCH_REVISION = 0x01        # the version's first byte once extend_patch.py's changes are in
-# MID..checksum land at $7FA0-$7FFE; $7FFF is the game's SaveRamEnd marker ($A5)
-MAX_GUARDED_BODY = 0x7FFF - 0x7FA0
+# MID..checksum land at $7FA0-$7FFE; $7FFF is the game's SaveRamEnd marker ($A5). The cart drops a
+# frame with a longer L (extend_patch.py's drain; beta 8's copied it on past $7FFF), so none is sent.
+MAX_FRAME_LENGTH = 0x7FFF - 0x7FA0
+MAX_GUARDED_BODY = MAX_FRAME_LENGTH
+# action $00: MID, action, count, two bytes per address, checksum
+MAX_READ_ADDRS = (MAX_FRAME_LENGTH - 4) // 2
 
 
 class SerialLike(Protocol):
@@ -66,8 +70,8 @@ def _make_cc_frame(mid: int, action: int, payload: bytes) -> bytes:
     checksum = sum(body) & 0xFF
     body_with_checksum = body + bytes((checksum,))
     L = len(body_with_checksum)
-    if L > 255:
-        raise ValueError(f"CC frame too large: {L}")
+    if L > MAX_FRAME_LENGTH:
+        raise ValueError(f"CC frame too large: {L} bytes (the cart takes {MAX_FRAME_LENGTH} at most)")
     return bytes((L,)) + body_with_checksum
 
 
@@ -179,10 +183,10 @@ class CCClient:
         self._expected_values = VERSION_LENGTH
         return self.poll_response(timeout_ms=timeout_ms)
 
-    def read_addrs(self, addrs: list[int], timeout_ms: int = 500, chunk_size: int = 100) -> bytes | None:
+    def read_addrs(self, addrs: list[int], timeout_ms: int = 500,
+                   chunk_size: int = MAX_READ_ADDRS) -> bytes | None:
         """Read N individual addresses; chunks into multiple frames if needed
-        (action 0x00 frames have a 1-byte count and a 1-byte L, so a single
-        frame fits at most ~125 addresses). Returns concatenated bytes in the
+        (a frame fits at most MAX_READ_ADDRS addresses). Returns concatenated bytes in the
         original `addrs` order, or None if any chunk times out."""
         if not addrs:
             return b""
