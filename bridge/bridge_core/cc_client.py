@@ -41,6 +41,7 @@ ACTION_GUARDED_WRITE = 0x05
 ACTION_VERSION = 0xFE
 VERSION_LENGTH = 5
 PATCH_REVISION = 0x01        # the version's first byte once extend_patch.py's changes are in
+REPLY_PRELUDE = bytes((P, P ^ 0xFF, 0x22, 0x22 ^ 0xFF))     # the cart's EDIO write, before each reply
 # MID..checksum land at $7FA0-$7FFE; $7FFF is the game's SaveRamEnd marker ($A5). The cart drops a
 # frame with a longer L (extend_patch.py's drain; beta 8's copied it on past $7FFF), so none is sent.
 MAX_FRAME_LENGTH = 0x7FFF - 0x7FA0
@@ -218,13 +219,37 @@ class CCClient:
                 snapshot[base + i] = byte
         return snapshot
 
+    def _framed_reply(self) -> bytes | None:
+        """The values of the expected reply, found by its whole header (prelude, size, $00 $20, MID,
+        action) in the bytes as received, and taken as they are: data can hold the same bytes as a
+        status pair (00 A5, 04 A5), which the scan below would cut out of it."""
+        header = REPLY_PRELUDE + bytes((self._expected_values + 3, 0x00, 0x20, self._expected_mid & 0xFF))
+        at = self._rx_buf.find(header)
+        while at >= 0:
+            action_at = at + len(header)
+            if action_at >= len(self._rx_buf):
+                return None
+            if self._rx_buf[action_at] in (self._expected_action & 0xFF, 0x00):
+                end = action_at + 1 + self._expected_values
+                if end > len(self._rx_buf):
+                    return None
+                result = bytes(self._rx_buf[action_at + 1:end])
+                self._rx_buf.clear()
+                return result
+            at = self._rx_buf.find(header, at + 1)
+        return None
+
     def poll_response(self, timeout_ms: int = 100) -> bytes | None:
-        """Wait up to timeout_ms for a response matching the last send_read_*."""
+        """Wait up to timeout_ms for a response matching the last send_read_*: by its whole header
+        first, else by scanning for [0x20, MID, action] with status pairs removed."""
         deadline = time.perf_counter() + timeout_ms / 1000.0
         while time.perf_counter() < deadline:
             n = self._sp.in_waiting
             if n:
                 self._rx_buf += self._sp.read(n)
+            framed = self._framed_reply()
+            if framed is not None:
+                return framed
             filt = _strip_status_pairs(bytes(self._rx_buf))
             for i in range(len(filt) - 3):
                 if (

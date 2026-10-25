@@ -137,3 +137,17 @@ def test_read_addrs_splits_into_frames_the_cart_takes():
     server.set_ram(0x0100, bytes(range(100)))
     assert client.read_addrs(list(range(0x0100, 0x0164)), timeout_ms=50) == bytes(range(100))
     assert sent == [MAX_READ_ADDRS, MAX_READ_ADDRS, 100 - 2 * MAX_READ_ADDRS]
+
+
+def test_reply_data_that_looks_like_a_status_pair_is_kept():
+    """Data can hold 00 A5 or 04 A5, the firmware's status pairs: the reply is found by its header
+    and its values taken as received, not with those pairs cut out."""
+    from bridge_core.cc_client import REPLY_PRELUDE
+    from .mock_serial import MockSerial
+    sp = MockSerial()
+    client = CCClient(sp)
+    client.send_read_array(0x0657, 4)
+    sp.take_tx()
+    values = bytes((0x00, 0xA5, 0x04, 0xA5))
+    sp.feed_rx(bytes((0x00, 0xA5)) + REPLY_PRELUDE + bytes((len(values) + 3, 0x00, 0x20, 1, 0x01)) + values)
+    assert client.poll_response(timeout_ms=20) == values
