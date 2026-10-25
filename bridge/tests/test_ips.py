@@ -110,18 +110,14 @@ def test_load_expected_manifest_decodes_offsets_and_hex():
 
 def test_real_manifest_validates_against_vanilla_prg0_and_prg1():
     """The shipped manifest should accept both PRG0 and PRG1 vanillas."""
-    import os
-    prg0_path = r"N:\Games\ROMs\NES\Legend of Zelda, The (U) (PRG0) [!].nes"
-    prg1_path = r"N:\Games\ROMs\NES\Legend of Zelda, The (U) (PRG1) [!].nes"
-    if not (os.path.exists(prg0_path) and os.path.exists(prg1_path)):
-        pytest.skip("vanilla ROMs not available on this machine")
+    from .vanilla_roms import vanilla
+    prg0 = vanilla("prg0")
+    prg1 = vanilla("prg1")
     patches = Path(__file__).parent.parent / "bridge_core" / "patches"
     patch_bytes = (patches / "zelda_z1rr_coop.ips").read_bytes()
     expected = ips.load_expected_manifest(
         (patches / "zelda_z1rr_coop.expected.json").read_bytes()
     )
-    prg0 = Path(prg0_path).read_bytes()
-    prg1 = Path(prg1_path).read_bytes()
     out0 = ips.apply_validated(prg0, patch_bytes, expected)
     out1 = ips.apply_validated(prg1, patch_bytes, expected)
     assert len(out0) == 131088

@@ -69,11 +69,10 @@ def test_real_zelda_cc_patch_roundtrips():
     byte-equality of the IPS itself (different valid encodings exist), but we
     can assert the round-trip semantic equivalence."""
     from pathlib import Path
-    rom_path = Path("D:/Downloads/Games/ROMs/Z1R/Legend of Zelda, The (USA).nes")
-    if not rom_path.exists():
-        pytest.skip("original Z1 ROM not present at expected path")
-    orig = rom_path.read_bytes()
-    patch = Path("bridge_core/patches/zelda_z1rr_coop.ips").read_bytes()
+
+    from .vanilla_roms import vanilla
+    orig = vanilla("prg0")
+    patch = (Path(__file__).parent.parent / "bridge_core" / "patches" / "zelda_z1rr_coop.ips").read_bytes()
     patched = apply(orig, patch)
     rebuilt_ips = make_ips(orig, patched)
     rebuilt_patched = apply(orig, rebuilt_ips)
