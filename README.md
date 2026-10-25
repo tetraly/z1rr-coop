@@ -91,7 +91,7 @@ Some 64-bit FCEUX builds run Lua on a thread where IUP cannot open the connectio
 1. Download and run the hardware bridge.
 2. Choose `EverDrive Pro N8`.
 3. Select your Zelda 1 ROM.
-4. Let the bridge patch and upload the ROM to the cart.
+4. Click `Send patched ROM to EDN8`: the bridge patches the ROM, copies it to the cart and starts it (click it again any time to restart the game), then click `Continue`.
 5. Choose the same relay/session code and mode as your partner.
 
 ### MiSTer

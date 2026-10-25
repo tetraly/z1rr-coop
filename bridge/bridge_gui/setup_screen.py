@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
-import sys
+import queue
 import threading
 from importlib.resources import files
 from pathlib import Path
@@ -13,7 +11,7 @@ from typing import Any
 
 import customtkinter as ctk
 
-from bridge_core import ips, patch_revisions
+from bridge_core import edn8_upload, ips, patch_revisions
 from bridge_core.mister_diagnostics import MisterDiagnosticReport, run_mister_diagnostics
 from bridge_core.mister_health import format_mister_health_summary, probe_mister_helper
 from bridge_core.mister_deploy import DeployAsset, MisterDeployService, MisterSshConfig
@@ -26,8 +24,9 @@ from bridge_gui.device_flow import (
 )
 
 
-# Where to copy the patched ROM on the EDN8 SD card (auto-created by edlink-n8)
-EDN8_TARGET_DIR = "sd:\\z1rr-coop\\"
+
+
+SEND_POLL_MS = 100
 
 
 class ROMSetupScreen(ctk.CTkScrollableFrame):
@@ -62,21 +61,19 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         self._browse_button = ctk.CTkButton(self, text="Browse...", command=self._pick_file)
         self._browse_button.pack(pady=10)
 
-        # Upload to EDN8 SD card via edlink-n8.exe (auto-detected; default ON if found)
+        # Patches the ROM, copies it to the EDN8's SD card (edlink-n8.exe, auto-detected) and starts
+        # it, staying on this screen, as often as wanted: the one way the bridge sends a ROM (not
+        # offered once a session is running, where it would lose the game's progress)
         edlink_present = self._edlink_path() is not None
-        self._upload_var = ctk.BooleanVar(value=edlink_present)
-        self._upload_check = ctk.CTkCheckBox(
-            self,
-            text=f"Also upload patched ROM to EDN8 ({EDN8_TARGET_DIR})",
-            variable=self._upload_var,
-            state="normal" if edlink_present else "disabled",
+        self._send_rom_btn = ctk.CTkButton(
+            self, text="Send patched ROM to EDN8", command=self._send_rom, state="disabled",
         )
-        self._upload_check.pack(pady=8)
+        self._send_rom_btn.pack(pady=8)
         self._edlink_missing_label = None
         if not edlink_present:
             self._edlink_missing_label = ctk.CTkLabel(
                 self,
-                text="(edlink-n8.exe not found in bridge/tools/ or PATH; upload disabled)",
+                text="(edlink-n8.exe not found in bridge/tools/ or PATH; sending disabled)",
                 text_color="gray",
                 font=ctk.CTkFont(size=10),
             )
@@ -185,6 +182,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         self._rom_path = Path(filename)
         self._file_label.configure(text=str(self._rom_path))
         self._inspect_rom()
+        self._update_send_rom_state()
 
     def _inspect_rom(self) -> None:
         assert self._rom_path is not None
@@ -223,14 +221,14 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             self._status_label.configure(
                 text=(
                     f"ROM was patched by the {older[0]} bridge. Will re-patch it for this bridge and "
-                    f"save as {patch_revisions.patched_path(self._rom_path, replacing_older=True).name} when you click Continue."
+                    f"save as {patch_revisions.patched_path(self._rom_path, replacing_older=True).name} when you send it or click Continue."
                 ),
                 text_color="gray",
             )
             self._patched_path = None
         else:
             self._status_label.configure(
-                text="ROM is not patched. Will save as <name>_emucoop.nes when you click Continue.",
+                text="ROM is not patched. Will save as <name>_emucoop.nes when you send it or click Continue.",
                 text_color="gray",
             )
             self._patched_path = None
@@ -247,6 +245,16 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             self.controller.show_screen("relay_setup")
             return
 
+        # Patch and save; sending it to the cart is the "Send patched ROM to EDN8" button's job
+        if not self._patch_chosen_rom():
+            return
+        # Stash the patched path on the controller for later screens
+        self.controller.patched_rom_path = self._patched_path
+        self.controller.show_screen("relay_setup")
+
+    def _patch_chosen_rom(self) -> bool:
+        """Patch the chosen ROM (unless it already is) and save it; False, with the reason shown,
+        when it can't be patched."""
         assert self._rom_path is not None
         rom_bytes = self._rom_path.read_bytes()
         try:
@@ -262,7 +270,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
                 ),
                 text_color="red",
             )
-            return
+            return False
         if not prepared.already_patched:
             out_path = patch_revisions.patched_path(self._rom_path, prepared.replaced_release is not None)
             out_path.write_bytes(prepared.rom)
@@ -271,88 +279,38 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
             self._status_label.configure(
                 text=f"✓ Patched and saved: {out_path.name}{again}", text_color="green"
             )
-        # Optionally upload to EDN8 via edlink-n8.exe (also auto-launches the
-        # ROM on the cart). If upload is disabled, surface the SD path so the
-        # user knows what to load from their cart's menu manually.
-        if self._upload_var.get() and self._patched_path is not None:
-            self._upload_to_edn8(self._patched_path)
-        elif self._patched_path is not None:
-            self._status_label.configure(
-                text=(
-                    f"✓ Patched and saved: {self._patched_path}. "
-                    f"Load this on your cart's menu before continuing."
-                ),
-                text_color="green",
-            )
-        # Stash the patched path on the controller for later screens
-        self.controller.patched_rom_path = self._patched_path
-        self.controller.show_screen("relay_setup")
+        return True
 
-    def _upload_to_edn8(self, file_path: Path) -> None:
-        """Push the patched ROM to the EDN8's SD card via edlink-n8.exe.
-        First ensures the target folder exists (mkdir is idempotent), then copies."""
-        edlink = self._edlink_path()
-        if edlink is None:
-            self._status_label.configure(
-                text="(edlink-n8.exe not found; skipping upload)",
-                text_color="orange",
-            )
+    def _update_send_rom_state(self) -> None:
+        ready = (self._endpoint_type() == DEVICE_EDN8 and self._rom_path is not None
+                 and self._continue_btn.cget("state") == "normal" and self._edlink_path() is not None)
+        self._send_rom_btn.configure(state="normal" if ready else "disabled")
+
+    def _send_rom(self) -> None:
+        if self._rom_path is None or not self._patch_chosen_rom() or self._patched_path is None:
             return
-        # edlink target dir without the trailing slash for -mkdir
-        target_dir_arg = EDN8_TARGET_DIR.rstrip("\\")
+        path = self._patched_path
+        self.controller.patched_rom_path = path
+        self._send_rom_btn.configure(state="disabled")
+        self._continue_btn.configure(state="disabled")
+        self._status_label.configure(text=f"Sending {path.name} to the EverDrive...", text_color="gray")
+        self._rom_sent: queue.Queue = queue.Queue()
+        threading.Thread(target=self._send_rom_worker, args=(path,), daemon=True).start()
+        self._wait_for_rom_sent()
+
+    def _send_rom_worker(self, path: Path) -> None:
+        # Off the Tk thread: the result goes back through a queue, never a Tk call
+        self._rom_sent.put(edn8_upload.upload_and_launch(path))
+
+    def _wait_for_rom_sent(self) -> None:
         try:
-            mkdir_result = subprocess.run(
-                [str(edlink), "-mkdir", target_dir_arg],
-                capture_output=True, text=True, timeout=15,
-            )
-            if mkdir_result.returncode != 0:
-                err = (mkdir_result.stderr or mkdir_result.stdout or "(no output)").strip()[:300]
-                self._status_label.configure(
-                    text=f"Could not create {target_dir_arg} (rc={mkdir_result.returncode}): {err}",
-                    text_color="red",
-                )
-                return
-            cp_result = subprocess.run(
-                [str(edlink), "-cp", str(file_path), EDN8_TARGET_DIR],
-                capture_output=True, text=True, timeout=30,
-            )
-            if cp_result.returncode != 0:
-                err = (cp_result.stderr or cp_result.stdout or "(no output)").strip()[:300]
-                self._status_label.configure(
-                    text=f"Upload failed (rc={cp_result.returncode}): {err}",
-                    text_color="red",
-                )
-                return
-            # Auto-launch the ROM on the cart so the user doesn't have to navigate
-            # the EDN8 menu manually. Passing the .nes path as the command itself
-            # triggers edlink's cmd_loadApp -> usb.appStart() path which uploads
-            # to usb-games and boots the ROM. Yes, this is a second upload (the
-            # -cp above keeps a permanent copy in z1rr-coop/), but the ROM is
-            # ~128 KB so the extra USB time is negligible compared to the UX win.
-            launch_result = subprocess.run(
-                [str(edlink), str(file_path)],
-                capture_output=True, text=True, timeout=30,
-            )
-            if launch_result.returncode != 0:
-                err = (launch_result.stderr or launch_result.stdout or "(no output)").strip()[:300]
-                self._status_label.configure(
-                    text=(
-                        f"Uploaded to {EDN8_TARGET_DIR}{file_path.name} but auto-launch "
-                        f"failed (rc={launch_result.returncode}): {err}. "
-                        f"Load it manually from your cart's menu."
-                    ),
-                    text_color="orange",
-                )
-            else:
-                self._status_label.configure(
-                    text=(
-                        f"✓ Uploaded to {EDN8_TARGET_DIR}{file_path.name} and "
-                        f"launched on cart."
-                    ),
-                    text_color="green",
-                )
-        except Exception as e:
-            self._status_label.configure(text=f"Upload error: {e}", text_color="red")
+            result = self._rom_sent.get_nowait()
+        except queue.Empty:
+            self.after(SEND_POLL_MS, self._wait_for_rom_sent)
+            return
+        self._status_label.configure(text=result.message, text_color=result.color)
+        self._continue_btn.configure(state="normal")
+        self._update_send_rom_state()
 
     def on_show(self) -> None:
         endpoint = self._endpoint_type()
@@ -376,13 +334,14 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         self._title_label.configure(text="ROM Setup")
         self._intro_label.configure(
             text=(
-                "Choose your Z1 ROM (vanilla or Z1R seed).\n"
+                "Choose your Z1 ROM (vanilla or Z1R seed), then send it to your EDN8.\n"
                 "We'll apply the z1rr-coop patch if it's not already patched."
             )
         )
         self._mister_frame.pack_forget()
-        if not self._upload_check.winfo_ismapped():
-            self._upload_check.pack(pady=8, before=self._status_label)
+        if not self._send_rom_btn.winfo_ismapped():
+            self._send_rom_btn.pack(pady=8, before=self._status_label)
+        self._update_send_rom_state()
         if self._edlink_missing_label is not None and not self._edlink_missing_label.winfo_ismapped():
             self._edlink_missing_label.pack(before=self._status_label)
 
@@ -391,7 +350,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         self._intro_label.configure(
             text="Choose your Zelda 1 source ROM, then deploy the MiSTer bridge files."
         )
-        self._upload_check.pack_forget()
+        self._send_rom_btn.pack_forget()
         if self._edlink_missing_label is not None:
             self._edlink_missing_label.pack_forget()
         if not self._mister_frame.winfo_ismapped():
@@ -403,6 +362,7 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
         self._file_label.configure(text="(no file selected)")
         self._status_label.configure(text="", text_color="gray")
         self._continue_btn.configure(state="disabled")
+        self._update_send_rom_state()
         self.controller.mister_config = None
 
     def _endpoint_type(self) -> str:
@@ -650,17 +610,5 @@ class ROMSetupScreen(ctk.CTkScrollableFrame):
 
     @staticmethod
     def _edlink_path() -> Path | None:
-        """Find edlink-n8.exe: PyInstaller bundle, source bridge/tools/, then PATH."""
-        # PyInstaller bundle: datas extract under sys._MEIPASS
-        if hasattr(sys, "_MEIPASS"):
-            bundled = Path(sys._MEIPASS) / "tools" / "edlink-n8.exe"
-            if bundled.is_file():
-                return bundled
-        # Source layout: bridge/tools/edlink-n8.exe
-        bundled = Path(__file__).parent.parent / "tools" / "edlink-n8.exe"
-        if bundled.is_file():
-            return bundled
-        # System PATH
-        which = shutil.which("edlink-n8.exe") or shutil.which("edlink-n8")
-        return Path(which) if which else None
+        return edn8_upload.find_edlink()
 

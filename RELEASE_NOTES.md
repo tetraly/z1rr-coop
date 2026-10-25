@@ -5,6 +5,7 @@
 - **ROMs patched by beta 8** are re-patched from their original when chosen; the beta 8 bridge refuses ROMs patched by this one.
 - **Beta 8 carts paired with newer ones:** the bridge no longer syncs a beta 8 cart's own $07FE (its patch flag), and ignores that flag's $AB when a beta 8 EDN8 partner sends it; it put a stray $AB into room $7F of levels 7-9.
 - **`bridge_cli patch-check`** checks a cart's patch revision and guarded write.
+- **Send patched ROM to EDN8**: one button on the ROM setup screen patches the ROM, copies it to the cart and starts it, staying on the screen, so the game can be restarted on the cart without restarting the bridge. It replaces the "Also upload patched ROM to EDN8" checkbox: Continue now only patches and saves.
 
 # z1rr-coop v2.0 beta 8 - release notes
 

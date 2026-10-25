@@ -22,6 +22,7 @@ MiSTer, EDN8 <-> MiSTer, EDN8 <-> EDN8, or MiSTer <-> MiSTer.
 2. **Run the .exe** and choose `EverDrive Pro N8` or `MiSTer`.
 3. For **EDN8**, plug in your cart and follow the patch/upload flow:
    - Pick your Z1 ROM (vanilla or Z1R seed; both work)
+   - Click `Send patched ROM to EDN8` to patch it, copy it to the cart's SD card and start it, then `Continue`
    - Auto-detect your EDN8's COM port
    - Choose a session code (any 6+ char string you and your partner agree on)
    - Connect to the relay

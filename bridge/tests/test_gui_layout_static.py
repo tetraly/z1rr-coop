@@ -67,3 +67,21 @@ def test_mister_setup_has_diagnose_and_copy_diagnostics_buttons():
     assert "run_mister_diagnostics" in source
     assert "start_helper_if_needed=True" in source
     assert 'helper.get("log_path")' in source
+
+
+def test_the_rom_screen_can_send_the_rom_again():
+    """One button on the ROM setup screen patches the ROM, sends it to the EverDrive and starts it,
+    staying on the screen, so the game can be restarted without restarting the bridge. It is the
+    only way to send: no upload checkbox, and Continue only patches. The connection and session
+    screens have no such button: during a session it would lose the game's progress."""
+    setup = (REPO_ROOT / "bridge" / "bridge_gui" / "setup_screen.py").read_text(encoding="utf-8")
+    relay = (REPO_ROOT / "bridge" / "bridge_gui" / "relay_setup_screen.py").read_text(encoding="utf-8")
+    session = (REPO_ROOT / "bridge" / "bridge_gui" / "session_screen.py").read_text(encoding="utf-8")
+
+    assert 'text="Send patched ROM to EDN8"' in setup
+    assert setup.count("edn8_upload.upload_and_launch(") == 1
+    assert "threading.Thread(target=self._send_rom_worker" in setup
+    assert "CTkCheckBox" not in setup and "Also upload" not in setup
+    assert "self._send_rom_btn.pack_forget()" in setup             # not for MiSTer
+    for source in (relay, session):
+        assert "Send ROM" not in source and "upload_and_launch" not in source
